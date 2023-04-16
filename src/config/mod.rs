@@ -22,7 +22,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load() -> Result<Config> {
+    pub fn load() -> Result<Self> {
         Self::load_from_path(&Self::get_path()?)
     }
 
@@ -31,9 +31,9 @@ impl Config {
         Ok(home_dir.join(".config/pcb_forge/config.yaml"))
     }
 
-    pub fn load_from_path(path: &Path) -> Result<Config> {
+    pub fn load_from_path(path: &Path) -> Result<Self> {
         let config = std::fs::read_to_string(path).context("Failed to read config file.")?;
-        let config: Config =
+        let config: Self =
             serde_yaml::from_str(&config).context("Failed to decode config file.")?;
 
         Ok(config)

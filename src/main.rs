@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+mod arguments;
 mod config;
 use config::Config;
 
@@ -14,6 +15,8 @@ fn main() {
 }
 
 fn trampoline() -> Result<()> {
+    let arguments: arguments::Arguments = argh::from_env();
+
     let config = match Config::load() {
         Ok(config) => config,
         Err(error) => {

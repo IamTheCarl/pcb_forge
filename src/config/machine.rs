@@ -1,29 +1,13 @@
 use camino::Utf8PathBuf;
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 use uom::si::{
-    angular_velocity::AngularVelocity, length::Length, power::Power, velocity::Velocity, Quantity,
+    angular_velocity::AngularVelocity, length::Length, power::Power, velocity::Velocity,
 };
 
 use nalgebra::Vector2;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
-fn parse_quantity<'de, U, V, D, DE>(deserializer: DE) -> Result<Quantity<D, U, V>, DE::Error>
-where
-    DE: Deserializer<'de>,
-    D: uom::si::Dimension + ?Sized,
-    U: uom::si::Units<V> + ?Sized,
-    V: uom::num_traits::Num + uom::Conversion<V>,
-    Quantity<D, U, V>: FromStr,
-    <uom::si::Quantity<D, U, V> as std::str::FromStr>::Err: std::fmt::Debug,
-{
-    use serde::de::Error;
-
-    let s = String::deserialize(deserializer)?;
-    let quantity = Quantity::from_str(&s)
-        .map_err(|error| DE::Error::custom(format!("Number formatting: {:?}", error)))?;
-
-    Ok(quantity)
-}
+use crate::parsing::parse_quantity;
 
 #[derive(Debug, Deserialize)]
 pub struct Machine {

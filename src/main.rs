@@ -1,8 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 mod arguments;
 mod config;
 use config::Config;
+mod parsing;
+
+use crate::forge_file::ForgeFile;
+mod forge_file;
 
 fn main() {
     simple_logger::SimpleLogger::new()
@@ -30,6 +34,16 @@ fn trampoline() -> Result<()> {
             config::Config::default()
         }
     };
-    dbg!(config);
+
+    match arguments.command {
+        arguments::CommandEnum::Build(build_configuration) => build(build_configuration, config),
+    }
+}
+
+fn build(build_configuration: arguments::BuildCommand, global_config: Config) -> Result<()> {
+    log::info!("Read Forge File: {:?}", build_configuration.forge_file_path);
+    let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
+        .context("Failed to load forge file.")?;
+
     Ok(())
 }

@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 mod arguments;
 mod config;
 use config::Config;
+mod gerber_file;
 mod parsing;
 
 use crate::forge_file::ForgeFile;
@@ -44,6 +45,33 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     log::info!("Read Forge File: {:?}", build_configuration.forge_file_path);
     let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
         .context("Failed to load forge file.")?;
+
+    for stage in forge_file.stages.iter() {
+        match stage {
+            forge_file::Stage::EngraveMask {
+                machine_config,
+                gerber_file,
+            } => {
+                log::info!("Process engrave stage: {:?}", gerber_file);
+
+                let file_path = build_configuration
+                    .forge_file_path
+                    .parent()
+                    .context("Could not get working directory of forge file.")?
+                    .join(gerber_file);
+                let gerber =
+                    gerber_file::load(&file_path).context("Failed to load gerber file.")?;
+                // TODO
+            }
+            forge_file::Stage::CutBoard {
+                machine_config,
+                file,
+            } => {
+                // TODO
+                log::info!("Process cutting stage: {}", file);
+            }
+        }
+    }
 
     Ok(())
 }

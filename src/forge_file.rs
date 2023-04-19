@@ -4,14 +4,12 @@ use semver::Version;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
+    fmt::Display,
     path::{Path, PathBuf},
 };
-use uom::si::length::{Length, Units};
+use uom::si::length::Length;
 
-use crate::{
-    config::machine::Machine,
-    parsing::{parse_length_unit, parse_quantity},
-};
+use crate::{config::machine::Machine, parsing::parse_quantity};
 
 #[derive(Debug, Deserialize)]
 pub struct ForgeFile {
@@ -59,4 +57,13 @@ pub enum CutBoardFile {
     Gerber(PathBuf),
     #[serde(rename = "drill_file")]
     Drill(PathBuf),
+}
+
+impl Display for CutBoardFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CutBoardFile::Gerber(file_path) => write!(f, "gerber file: {:?}", file_path),
+            CutBoardFile::Drill(file_path) => write!(f, "drill file: {:?}", file_path),
+        }
+    }
 }

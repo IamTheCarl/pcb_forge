@@ -1,9 +1,12 @@
+use nalgebra::Vector2;
 use serde::{Deserialize, Deserializer};
 use std::str::FromStr;
 use uom::si::{
-    length::{units, Units},
+    length::{units, Length, Units},
     Quantity,
 };
+
+pub mod gerber;
 
 pub fn parse_quantity<'de, U, V, D, DE>(deserializer: DE) -> Result<Quantity<D, U, V>, DE::Error>
 where
@@ -37,4 +40,21 @@ where
     }
 
     Err(Error::unknown_variant(&s, &["mm", "mil", "in"])) // TODO there are a lot more units we support than this.
+}
+
+#[derive(Debug)]
+pub struct VectorVolumeBounds {
+    pub start: Vector2<Length<uom::si::SI<f32>, f32>>,
+    pub end: Vector2<Length<uom::si::SI<f32>, f32>>,
+}
+
+pub trait VectorVolume {
+    fn bounds(&self) -> VectorVolumeBounds;
+    fn is_point_in_volume(&self, point: Vector2<Length<uom::si::SI<f32>, f32>>) -> bool;
+    fn cast_line(
+        &self,
+        start: Vector2<Length<uom::si::SI<f32>, f32>>,
+        end: Vector2<Length<uom::si::SI<f32>, f32>>,
+    );
+    // fn trace_boundaries(&self) -> impl Iterator<>,
 }

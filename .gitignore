@@ -1,1 +1,5 @@
+# Rust build targets.
 /target
+
+# Forge output directory.
+/forge

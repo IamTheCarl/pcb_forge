@@ -1,3 +1,5 @@
+use std::fs;
+
 use anyhow::{Context, Result};
 
 mod arguments;
@@ -6,7 +8,7 @@ use config::Config;
 mod gerber_file;
 mod parsing;
 
-use crate::forge_file::ForgeFile;
+use crate::{forge_file::ForgeFile, gerber_file::GerberFile};
 mod forge_file;
 
 fn main() {
@@ -46,7 +48,22 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
         .context("Failed to load forge file.")?;
 
-    for stage in forge_file.stages.iter() {
+    for (index, stage) in forge_file.stages.iter().enumerate() {
+        let debug_output_directory = if build_configuration.debug {
+            let debug_output_directory = build_configuration
+                .target_directory
+                .join("debug")
+                .join(format!("stage{}", index));
+            fs::create_dir_all(&debug_output_directory)
+                .context("Failed to create directory for debug output.")?;
+
+            log::info!("Debug output directory: {:?}", debug_output_directory);
+
+            Some(debug_output_directory)
+        } else {
+            None
+        };
+
         match stage {
             forge_file::Stage::EngraveMask {
                 machine_config,
@@ -59,8 +76,35 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .parent()
                     .context("Could not get working directory of forge file.")?
                     .join(gerber_file);
-                let gerber =
-                    gerber_file::load(&file_path).context("Failed to load gerber file.")?;
+
+                let mut gerber = GerberFile::default();
+
+                // We load the file, or at least attempt to. We'll handle an error condition later.
+                let load_result = gerber_file::load(&mut gerber, &file_path)
+                    .context("Failed to load gerber file.");
+
+                // dbg!(&gerber);
+
+                // Debug render if applicable.
+                if let Some(debug_output_directory) = debug_output_directory {
+                    let output_file = debug_output_directory.join("gerber.svg");
+                    let bounds = gerber.calculate_bounds();
+
+                    let mut document = svg_composer::Document::new(
+                        Vec::new(),
+                        Some([bounds.0, bounds.1, bounds.2, bounds.3]),
+                    );
+                    gerber
+                        .debug_render(&mut document)
+                        .context("Failed to render gerber debug SVG file.")?;
+
+                    fs::write(output_file, document.render())
+                        .context("Failed to save gerber debug SVG file.")?;
+                }
+
+                // Okay cool, now you can handle the error.
+                load_result?;
+
                 // TODO
             }
             forge_file::Stage::CutBoard {

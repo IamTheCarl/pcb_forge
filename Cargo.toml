@@ -20,4 +20,5 @@ argh = "0.1.10"
 semver = { version = "1.0.17", features = [ "serde" ] }
 nom = "7.1.3"
 nom_locate = "4.1.0"
-
+svg_composer = "0.1.0"
+thiserror = "1.0.40"

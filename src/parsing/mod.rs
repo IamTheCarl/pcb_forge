@@ -1,10 +1,7 @@
 use nalgebra::Vector2;
 use serde::{Deserialize, Deserializer};
 use std::str::FromStr;
-use uom::si::{
-    length::{units, Length, Units},
-    Quantity,
-};
+use uom::si::{length::Length, Quantity};
 
 pub mod gerber;
 
@@ -26,21 +23,21 @@ where
     Ok(quantity)
 }
 
-pub fn parse_length_unit<'de, DE>(deserializer: DE) -> Result<Units, DE::Error>
-where
-    DE: Deserializer<'de>,
-{
-    use serde::de::Error;
+// pub fn parse_length_unit<'de, DE>(deserializer: DE) -> Result<Units, DE::Error>
+// where
+//     DE: Deserializer<'de>,
+// {
+//     use serde::de::Error;
 
-    let s = String::deserialize(deserializer)?;
-    for unit in units() {
-        if s == unit.abbreviation() || s == unit.singular() || s == unit.plural() {
-            return Ok(unit);
-        }
-    }
+//     let s = String::deserialize(deserializer)?;
+//     for unit in units() {
+//         if s == unit.abbreviation() || s == unit.singular() || s == unit.plural() {
+//             return Ok(unit);
+//         }
+//     }
 
-    Err(Error::unknown_variant(&s, &["mm", "mil", "in"])) // TODO there are a lot more units we support than this.
-}
+//     Err(Error::unknown_variant(&s, &["mm", "mil", "in"])) // TODO there are a lot more units we support than this.
+// }
 
 #[derive(Debug)]
 pub struct VectorVolumeBounds {

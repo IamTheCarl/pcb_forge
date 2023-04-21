@@ -26,4 +26,8 @@ pub struct BuildCommand {
     #[argh(option, default = "PathBuf::from(\"forge\")")]
     /// path to the folder to place output files into.
     pub target_directory: PathBuf,
+
+    #[argh(switch)]
+    /// enable debug output files
+    pub debug: bool,
 }

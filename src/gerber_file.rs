@@ -12,11 +12,19 @@ use svg_composer::{
         Element, Path as SvgPath,
     },
 };
-use uom::si::length::{mil, millimeter, Length};
+use uom::si::{
+    length::{mil, millimeter, Length},
+    ratio::{percent, Ratio},
+    velocity::{millimeter_per_second, Velocity},
+};
 
-use crate::parsing::gerber::{
-    parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
-    Operation, Polarity, Span, UnitMode,
+use crate::{
+    config::machine::JobConfig,
+    gcode_generation::{GCodeFile, GCommand, MovementType},
+    parsing::gerber::{
+        parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
+        Operation, Polarity, Span, UnitMode,
+    },
 };
 
 #[derive(Debug, Default)]
@@ -26,13 +34,97 @@ pub struct GerberFile {
 }
 
 impl GerberFile {
-    pub fn debug_render(&self, svg: &mut SvgDocument) -> Result<()> {
-        for (index, shape) in self
-            .shapes
+    fn iter_all_shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.shapes
             .iter()
             .chain(self.aperture_macro_flashes.iter().flatten())
-            .enumerate()
-        {
+    }
+
+    pub fn generate_gcode(&self, job_config: &JobConfig) -> Result<GCodeFile> {
+        match job_config.tool_power {
+            crate::config::machine::ToolConfig::Laser {
+                laser_power,
+                work_speed,
+            } => {
+                let mut commands = vec![
+                    GCommand::AbsoluteMode,
+                    GCommand::UnitMode(UnitMode::Metric),
+                    GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
+                        3000.0, // TODO this should come from the config file.
+                    )),
+                    GCommand::SetWorkSpeed(work_speed),
+                    GCommand::SetPower(laser_power),
+                    GCommand::SetFanPower {
+                        index: 0,
+                        power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                    },
+                ];
+
+                // Start by generating GCode for the outlines.
+                // FIXME this needs to account for the beam diameter.
+                for shape in self.iter_all_shapes() {
+                    for segment in shape.segments.iter() {
+                        match segment {
+                            Segment::Move { target } => {
+                                commands.push(GCommand::MoveTo {
+                                    target: (
+                                        Length::new::<millimeter>(target.x),
+                                        Length::new::<millimeter>(target.y),
+                                    ),
+                                });
+                            }
+                            Segment::Line { end } => {
+                                commands.push(GCommand::Cut {
+                                    movement: MovementType::Linear,
+                                    target: (
+                                        Length::new::<millimeter>(end.x),
+                                        Length::new::<millimeter>(end.y),
+                                    ),
+                                });
+                            }
+                            Segment::ClockwiseCurve { end, diameter } => {
+                                commands.push(GCommand::Cut {
+                                    movement: MovementType::ClockwiseCurve {
+                                        diameter: Length::new::<millimeter>(*diameter),
+                                    },
+                                    target: (
+                                        Length::new::<millimeter>(end.x),
+                                        Length::new::<millimeter>(end.y),
+                                    ),
+                                });
+                            }
+                            Segment::CounterClockwiseCurve { end, diameter } => {
+                                commands.push(GCommand::Cut {
+                                    movement: MovementType::CounterClockwiseCurve {
+                                        diameter: Length::new::<millimeter>(*diameter),
+                                    },
+                                    target: (
+                                        Length::new::<millimeter>(end.x),
+                                        Length::new::<millimeter>(end.y),
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                Ok(GCodeFile::new(laser_power, commands))
+            }
+            crate::config::machine::ToolConfig::Drill {
+                spindle_rpm: _,
+                plunge_speed: _,
+            } => bail!("gerber files cannot be drilled"),
+            crate::config::machine::ToolConfig::EndMill {
+                spindle_rpm,
+                max_cut_depth,
+                plunge_speed,
+                work_speed,
+            } => bail!("milling gerber files is not yet supported"),
+        }
+    }
+
+    pub fn debug_render(&self, svg: &mut SvgDocument) -> Result<()> {
+        for (index, shape) in self.iter_all_shapes().enumerate() {
             let mut commands = Vec::new();
 
             shape.debug_render(&mut commands)?;

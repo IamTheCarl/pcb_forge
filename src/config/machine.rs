@@ -14,10 +14,10 @@ pub struct Machine {
     pub tools: HashMap<String, Tool>,
 
     /// Configurations for materials and tools that can be used for engraving.
-    pub engraving_configs: HashMap<String, EngravingConfig>,
+    pub engraving_configs: HashMap<String, JobConfig>,
 
     /// Configurations for materials and tools that can be used for cutting.
-    pub cutting_configs: HashMap<String, CuttingConfig>,
+    pub cutting_configs: HashMap<String, JobConfig>,
 
     /// The safe working area of the machine.
     pub workspace_area: WorkspaceSize,
@@ -38,7 +38,7 @@ impl From<WorkspaceSize> for Vector2<Length<uom::si::SI<f32>, f32>> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct EngravingConfig {
+pub struct JobConfig {
     /// The tool installed in the machine. For a milling machine, this would be the bit you installed.
     /// For a laser cutter, this should represent the laser.
     pub tool: Utf8PathBuf,
@@ -46,17 +46,6 @@ pub struct EngravingConfig {
     /// The power of the tool. The unit depends on the tool.
     #[serde(flatten)]
     pub tool_power: ToolConfig,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CuttingConfig {
-    /// The tool installed in the machine. For a milling machine, this would be the bit you installed.
-    /// For a laser cutter, this should represent the laser.
-    pub tool: Utf8PathBuf,
-
-    /// The power of the tool. The unit depends on the tool.
-    #[serde(flatten)]
-    pub tool_config: ToolConfig,
 }
 
 #[derive(Debug, Deserialize)]

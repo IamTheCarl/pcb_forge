@@ -186,7 +186,7 @@ pub enum Attribute<'a> {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum UnitMode {
     Metric,
     Imperial,

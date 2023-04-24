@@ -1,10 +1,11 @@
 use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 mod arguments;
 mod config;
 use config::Config;
+mod gcode_generation;
 mod gerber_file;
 mod parsing;
 
@@ -48,12 +49,12 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
         .context("Failed to load forge file.")?;
 
-    for (index, stage) in forge_file.stages.iter().enumerate() {
+    for (stage_index, stage) in forge_file.stages.iter().enumerate() {
         let debug_output_directory = if build_configuration.debug {
             let debug_output_directory = build_configuration
                 .target_directory
                 .join("debug")
-                .join(format!("stage{}", index));
+                .join(format!("stage{}", stage_index));
             fs::create_dir_all(&debug_output_directory)
                 .context("Failed to create directory for debug output.")?;
 
@@ -70,6 +71,36 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 gerber_file,
             } => {
                 log::info!("Process engrave stage: {:?}", gerber_file);
+                let machine_config_path = machine_config
+                    .as_ref()
+                    .or(global_config.default_engraver.as_ref())
+                    .context("An engraver was not specified and a global default is not set.")?;
+                log::info!("Using machine configuration: {}", machine_config_path);
+
+                let mut machine_config_path = machine_config_path.iter();
+                let machine_name = machine_config_path
+                    .next()
+                    .context("Machine name not provided by machine config path.")?
+                    .to_string();
+                let machine_profile = machine_config_path
+                    .next()
+                    .context("Machine profile not provided by machine config path.")?
+                    .to_string();
+
+                if machine_config_path.next().is_some() {
+                    bail!("Too many parts to machine config path.");
+                }
+
+                let machine_config = forge_file
+                    .machines
+                    .get(&machine_name)
+                    .or(global_config.machines.get(&machine_name))
+                    .context("Failed to find machine configuration.")?;
+
+                let machine_profile = machine_config
+                    .engraving_configs
+                    .get(&machine_profile)
+                    .context("Failed to find machine profile.")?;
 
                 let file_path = build_configuration
                     .forge_file_path
@@ -82,8 +113,6 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 // We load the file, or at least attempt to. We'll handle an error condition later.
                 let load_result = gerber_file::load(&mut gerber, &file_path)
                     .context("Failed to load gerber file.");
-
-                // dbg!(&gerber);
 
                 // Debug render if applicable.
                 if let Some(debug_output_directory) = debug_output_directory {
@@ -105,7 +134,15 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 // Okay cool, now you can handle the error.
                 load_result?;
 
-                // TODO
+                let gcode_file = gerber
+                    .generate_gcode(machine_profile)
+                    .context("Failed to generate GCode file.")?;
+
+                let output_file = build_configuration
+                    .target_directory
+                    .join(format!("stage{}.gcode", stage_index));
+                fs::write(output_file, format!("{}", gcode_file))
+                    .context("Failed to save GCode file.")?;
             }
             forge_file::Stage::CutBoard {
                 machine_config,

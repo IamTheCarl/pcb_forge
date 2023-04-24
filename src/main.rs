@@ -9,7 +9,10 @@ mod gcode_generation;
 mod gerber_file;
 mod parsing;
 
-use crate::{forge_file::ForgeFile, gerber_file::GerberFile};
+use crate::{
+    config::machine::Tool, forge_file::ForgeFile, gcode_generation::ToolSelection,
+    gerber_file::GerberFile,
+};
 mod forge_file;
 
 fn main() {
@@ -97,10 +100,40 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .or(global_config.machines.get(&machine_name))
                     .context("Failed to find machine configuration.")?;
 
-                let machine_profile = machine_config
+                let job_config = machine_config
                     .engraving_configs
                     .get(&machine_profile)
                     .context("Failed to find machine profile.")?;
+
+                let mut tool_path = job_config.tool.ancestors();
+                let tool_name = tool_path
+                    .next()
+                    .context("no tool name provided")?
+                    .to_string();
+
+                log::info!("Using tool: {}", tool_name);
+
+                let tool = machine_config
+                    .tools
+                    .get(&tool_name)
+                    .context("Could not find specified tool.")?;
+
+                let bit_name = tool_path.next().map(|name| name.to_string());
+
+                let tool_selection = match tool {
+                    Tool::Laser(laser) => ToolSelection::Laser { laser },
+                    Tool::Spindle(spindle) => {
+                        let bit_name = bit_name.context("No bit name provided for spindle.")?;
+                        log::info!("Using bit: {}", bit_name);
+                        ToolSelection::Spindle {
+                            spindle,
+                            bit: spindle
+                                .bits
+                                .get(&bit_name)
+                                .context("Spindle does not have a bit with requested name.")?,
+                        }
+                    }
+                };
 
                 let file_path = build_configuration
                     .forge_file_path
@@ -117,7 +150,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 // Debug render if applicable.
                 if let Some(debug_output_directory) = debug_output_directory {
                     let output_file = debug_output_directory.join("gerber.svg");
-                    let bounds = gerber.calculate_bounds();
+                    let bounds = gerber.calculate_svg_bounds();
 
                     let mut document = svg_composer::Document::new(
                         Vec::new(),
@@ -135,7 +168,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 load_result?;
 
                 let gcode_file = gerber
-                    .generate_gcode(machine_profile)
+                    .generate_gcode(job_config, &tool_selection)
                     .context("Failed to generate GCode file.")?;
 
                 let output_file = build_configuration

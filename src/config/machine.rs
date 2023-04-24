@@ -84,21 +84,27 @@ pub enum ToolConfig {
 #[derive(Debug, Deserialize)]
 pub enum Tool {
     #[serde(rename = "laser")]
-    Laser {
-        #[serde(deserialize_with = "parse_quantity")]
-        point_diameter: Length<uom::si::SI<f32>, f32>,
-
-        #[serde(deserialize_with = "parse_quantity")]
-        max_power: Power<uom::si::SI<f32>, f32>,
-    },
+    Laser(LaserConfig),
 
     #[serde(rename = "spindle")]
-    Spindle {
-        #[serde(deserialize_with = "parse_quantity")]
-        max_speed: AngularVelocity<uom::si::SI<f32>, f32>,
+    Spindle(SpindleConfig),
+}
 
-        bits: HashMap<String, SpindleBit>,
-    },
+#[derive(Debug, Deserialize)]
+pub struct LaserConfig {
+    #[serde(deserialize_with = "parse_quantity")]
+    pub point_diameter: Length<uom::si::SI<f32>, f32>,
+
+    #[serde(deserialize_with = "parse_quantity")]
+    pub max_power: Power<uom::si::SI<f32>, f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpindleConfig {
+    #[serde(deserialize_with = "parse_quantity")]
+    pub max_speed: AngularVelocity<uom::si::SI<f32>, f32>,
+
+    pub bits: HashMap<String, SpindleBit>,
 }
 
 #[derive(Debug, Deserialize)]

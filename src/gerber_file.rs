@@ -20,7 +20,7 @@ use uom::si::{
 
 use crate::{
     config::machine::JobConfig,
-    gcode_generation::{GCodeFile, GCommand, MovementType},
+    gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
     parsing::gerber::{
         parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
         Operation, Polarity, Span, UnitMode,
@@ -40,7 +40,11 @@ impl GerberFile {
             .chain(self.aperture_macro_flashes.iter().flatten())
     }
 
-    pub fn generate_gcode(&self, job_config: &JobConfig) -> Result<GCodeFile> {
+    pub fn generate_gcode(
+        &self,
+        job_config: &JobConfig,
+        tool_config: &ToolSelection,
+    ) -> Result<GCodeFile> {
         match job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
                 laser_power,
@@ -108,6 +112,11 @@ impl GerberFile {
                     }
                 }
 
+                // Now we generate the infill.
+                let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
+                let (span_x, span_y) = (max_x - min_x, max_y - min_y);
+                // let (delta_x, delta_y) = (span_x / tool_config)
+
                 Ok(GCodeFile::new(laser_power, commands))
             }
             crate::config::machine::ToolConfig::Drill {
@@ -146,7 +155,32 @@ impl GerberFile {
         Ok(())
     }
 
-    pub fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
+    fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
+        if !self.shapes.is_empty() {
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+
+            for shape in self
+                .shapes
+                .iter()
+                .chain(self.aperture_macro_flashes.iter().flatten())
+            {
+                let (local_min_x, local_min_y, local_max_x, local_max_y) = shape.calculate_bounds();
+                min_x = min_x.min(local_min_x);
+                min_y = min_y.min(local_min_y);
+                max_x = max_x.max(local_max_x);
+                max_y = max_y.max(local_max_y);
+            }
+
+            (min_x, min_y, max_x, max_y)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        }
+    }
+
+    pub fn calculate_svg_bounds(&self) -> (f32, f32, f32, f32) {
         if !self.shapes.is_empty() {
             let mut min_x = f32::MAX;
             let mut min_y = f32::MAX;

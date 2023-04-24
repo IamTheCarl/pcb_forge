@@ -8,7 +8,10 @@ use uom::si::{
     velocity::{inch_per_second, millimeter_per_second, Velocity},
 };
 
-use crate::parsing::gerber::UnitMode;
+use crate::{
+    config::machine::{LaserConfig, SpindleBit, SpindleConfig},
+    parsing::gerber::UnitMode,
+};
 
 pub enum GCommand {
     AbsoluteMode,
@@ -115,7 +118,7 @@ impl Display for GCodeFile {
                         UnitMode::Imperial => (x.get::<mil>(), y.get::<mil>()),
                     };
 
-                    writeln!(f, "G1 X{} Y{}", x, y)
+                    writeln!(f, "G0 X{} Y{}", x, y)
                 }
                 GCommand::UnitMode(new_mode) => {
                     unit_mode = *new_mode;
@@ -146,4 +149,14 @@ impl GCodeFile {
             commands,
         }
     }
+}
+
+pub enum ToolSelection<'a> {
+    Laser {
+        laser: &'a LaserConfig,
+    },
+    Spindle {
+        spindle: &'a SpindleConfig,
+        bit: &'a SpindleBit,
+    },
 }

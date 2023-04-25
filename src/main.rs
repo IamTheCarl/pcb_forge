@@ -6,6 +6,7 @@ mod arguments;
 mod config;
 use config::Config;
 mod gcode_generation;
+mod geometry;
 mod gerber_file;
 mod parsing;
 
@@ -148,7 +149,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .context("Failed to load gerber file.");
 
                 // Debug render if applicable.
-                if let Some(debug_output_directory) = debug_output_directory {
+                if let Some(debug_output_directory) = debug_output_directory.as_ref() {
                     let output_file = debug_output_directory.join("gerber.svg");
                     let bounds = gerber.calculate_svg_bounds();
 
@@ -157,7 +158,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                         Some([bounds.0, bounds.1, bounds.2, bounds.3]),
                     );
                     gerber
-                        .debug_render(&mut document)
+                        .debug_render(&mut document, false)
                         .context("Failed to render gerber debug SVG file.")?;
 
                     fs::write(output_file, document.render())
@@ -166,6 +167,27 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
 
                 // Okay cool, now you can handle the error.
                 load_result?;
+
+                // Let's try to simplify it.
+                let gerber = gerber.simplify();
+
+                // Debug render if applicable.
+                if let Some(debug_output_directory) = debug_output_directory.as_ref() {
+                    let output_file = debug_output_directory.join("gerber_simplified.svg");
+                    let bounds = gerber.calculate_svg_bounds();
+
+                    let mut document = svg_composer::Document::new(
+                        Vec::new(),
+                        Some([bounds.0, bounds.1, bounds.2, bounds.3]),
+                    );
+
+                    gerber
+                        .debug_render(&mut document, true)
+                        .context("Failed to render gerber debug SVG file.")?;
+
+                    fs::write(output_file, document.render())
+                        .context("Failed to save gerber debug SVG file.")?;
+                }
 
                 let gcode_file = gerber
                     .generate_gcode(job_config, &tool_selection)

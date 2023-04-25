@@ -351,6 +351,14 @@ pub enum Polarity {
     Clear,
     Dark,
 }
+impl Polarity {
+    pub(crate) fn inverse(&self) -> Polarity {
+        match self {
+            Polarity::Clear => Polarity::Dark,
+            Polarity::Dark => Polarity::Clear,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum MirroringMode {

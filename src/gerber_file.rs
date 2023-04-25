@@ -4,23 +4,15 @@ use std::{collections::HashMap, fs, ops::Deref, path::Path};
 use svg_composer::{
     document::Document as SvgDocument,
     element::{
-        attributes::{Color, Paint},
-        path::{
-            command::{Arc as SvgArc, CoordinateType, End, LineTo, LineToOption, MoveTo},
-            Command,
-        },
+        attributes::{Color, ColorName, Paint, Size},
+        path::command::End,
         Element, Path as SvgPath,
     },
 };
-use uom::si::{
-    length::{mil, millimeter, Length},
-    ratio::{percent, Ratio},
-    velocity::{millimeter_per_second, Velocity},
-};
+use uom::si::length::{mil, millimeter, Length};
 
 use crate::{
-    config::machine::JobConfig,
-    gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
+    geometry::{Segment, Shape, ShapeCollection},
     parsing::gerber::{
         parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
         Operation, Polarity, Span, UnitMode,
@@ -40,99 +32,43 @@ impl GerberFile {
             .chain(self.aperture_macro_flashes.iter().flatten())
     }
 
-    pub fn generate_gcode(
-        &self,
-        job_config: &JobConfig,
-        tool_config: &ToolSelection,
-    ) -> Result<GCodeFile> {
-        match job_config.tool_power {
-            crate::config::machine::ToolConfig::Laser {
-                laser_power,
-                work_speed,
-            } => {
-                let mut commands = vec![
-                    GCommand::AbsoluteMode,
-                    GCommand::UnitMode(UnitMode::Metric),
-                    GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
-                        3000.0, // TODO this should come from the config file.
-                    )),
-                    GCommand::SetWorkSpeed(work_speed),
-                    GCommand::SetPower(laser_power),
-                    GCommand::SetFanPower {
-                        index: 0,
-                        power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                    },
-                ];
+    pub fn simplify(&self) -> ShapeCollection {
+        let mut shapes = Vec::new();
 
-                // Start by generating GCode for the outlines.
-                // FIXME this needs to account for the beam diameter.
-                for shape in self.iter_all_shapes() {
-                    for segment in shape.segments.iter() {
-                        match segment {
-                            Segment::Move { target } => {
-                                commands.push(GCommand::MoveTo {
-                                    target: (
-                                        Length::new::<millimeter>(target.x),
-                                        Length::new::<millimeter>(target.y),
-                                    ),
-                                });
-                            }
-                            Segment::Line { end } => {
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::Linear,
-                                    target: (
-                                        Length::new::<millimeter>(end.x),
-                                        Length::new::<millimeter>(end.y),
-                                    ),
-                                });
-                            }
-                            Segment::ClockwiseCurve { end, diameter } => {
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::ClockwiseCurve {
-                                        diameter: Length::new::<millimeter>(*diameter),
-                                    },
-                                    target: (
-                                        Length::new::<millimeter>(end.x),
-                                        Length::new::<millimeter>(end.y),
-                                    ),
-                                });
-                            }
-                            Segment::CounterClockwiseCurve { end, diameter } => {
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::CounterClockwiseCurve {
-                                        diameter: Length::new::<millimeter>(*diameter),
-                                    },
-                                    target: (
-                                        Length::new::<millimeter>(end.x),
-                                        Length::new::<millimeter>(end.y),
-                                    ),
-                                });
-                            }
-                        }
-                    }
+        // Iterate all our shapes *and* the macro flashes within.
+        for shape in self.iter_all_shapes() {
+            let mut new_shapes = shape.simplify();
+            shapes.append(&mut new_shapes);
+        }
+
+        // Merge shapes.
+        let mut merged_shapes = Vec::new();
+        while let Some(mut to_merge) = shapes.pop() {
+            let mut index = 0;
+            while index < shapes.len() {
+                let shape = &shapes[index];
+                if let Some(merged) = to_merge.merge(shape) {
+                    to_merge = merged;
+                    shapes.remove(index);
+                    index = 0;
+                } else {
+                    index += 1;
                 }
-
-                // Now we generate the infill.
-                let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
-                let (span_x, span_y) = (max_x - min_x, max_y - min_y);
-                // let (delta_x, delta_y) = (span_x / tool_config)
-
-                Ok(GCodeFile::new(laser_power, commands))
             }
-            crate::config::machine::ToolConfig::Drill {
-                spindle_rpm: _,
-                plunge_speed: _,
-            } => bail!("gerber files cannot be drilled"),
-            crate::config::machine::ToolConfig::EndMill {
-                spindle_rpm,
-                max_cut_depth,
-                plunge_speed,
-                work_speed,
-            } => bail!("milling gerber files is not yet supported"),
+
+            merged_shapes.push(to_merge);
+        }
+
+        // Not actually necessary but it makes debugging a little easier since now things will render in the same order
+        // as if we hadn't done the merge.
+        merged_shapes.reverse();
+
+        ShapeCollection {
+            shapes: merged_shapes,
         }
     }
 
-    pub fn debug_render(&self, svg: &mut SvgDocument) -> Result<()> {
+    pub fn debug_render(&self, svg: &mut SvgDocument, include_outline: bool) -> Result<()> {
         for (index, shape) in self.iter_all_shapes().enumerate() {
             let mut commands = Vec::new();
 
@@ -145,9 +81,17 @@ impl GerberFile {
                 Polarity::Dark => Color::from_rgba(255, (index % 255) as u8, 0, 128),
             };
 
-            let path = SvgPath::new()
-                .set_fill(Paint::from_color(color))
-                .add_commands(commands);
+            let path = if !include_outline {
+                SvgPath::new()
+                    .set_fill(Paint::from_color(color))
+                    .add_commands(commands)
+            } else {
+                SvgPath::new()
+                    .set_stroke(Paint::from_color(Color::from_name(ColorName::Blue)))
+                    .set_stroke_width(Size::from_length(0.02))
+                    .set_fill(Paint::from_color(color))
+                    .add_commands(commands)
+            };
 
             svg.add_element(Box::new(path));
         }
@@ -162,11 +106,7 @@ impl GerberFile {
             let mut max_x = f32::MIN;
             let mut max_y = f32::MIN;
 
-            for shape in self
-                .shapes
-                .iter()
-                .chain(self.aperture_macro_flashes.iter().flatten())
-            {
+            for shape in self.iter_all_shapes() {
                 let (local_min_x, local_min_y, local_max_x, local_max_y) = shape.calculate_bounds();
                 min_x = min_x.min(local_min_x);
                 min_y = min_y.min(local_min_y);
@@ -181,493 +121,8 @@ impl GerberFile {
     }
 
     pub fn calculate_svg_bounds(&self) -> (f32, f32, f32, f32) {
-        if !self.shapes.is_empty() {
-            let mut min_x = f32::MAX;
-            let mut min_y = f32::MAX;
-            let mut max_x = f32::MIN;
-            let mut max_y = f32::MIN;
-
-            for shape in self
-                .shapes
-                .iter()
-                .chain(self.aperture_macro_flashes.iter().flatten())
-            {
-                let (local_min_x, local_min_y, local_max_x, local_max_y) = shape.calculate_bounds();
-                min_x = min_x.min(local_min_x);
-                min_y = min_y.min(local_min_y);
-                max_x = max_x.max(local_max_x);
-                max_y = max_y.max(local_max_y);
-            }
-
-            (min_x, min_y, max_x - min_x, max_y - min_y)
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Shape {
-    polarity: Polarity,
-    segments: Vec<Segment>,
-}
-
-impl Shape {
-    fn debug_render(&self, path: &mut Vec<Box<dyn Command>>) -> Result<()> {
-        for segment in self.segments.iter() {
-            path.push(segment.debug_render());
-        }
-
-        Ok(())
-    }
-
-    fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
-        let mut min_x = f32::MAX;
-        let mut min_y = f32::MAX;
-        let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
-
-        for segment in self.segments.iter() {
-            let (local_min_x, local_min_y, local_max_x, local_max_y) = segment.calculate_bounds();
-            min_x = min_x.min(local_min_x);
-            min_y = min_y.min(local_min_y);
-            max_x = max_x.max(local_max_x);
-            max_y = max_y.max(local_max_y);
-        }
-
-        (min_x, min_y, max_x, max_y)
-    }
-
-    fn line(
-        transform: Matrix2<f32>,
-        polarity: Polarity,
-        diameter: f32,
-        start: Vector2<f32>,
-        end: Vector2<f32>,
-    ) -> Self {
-        let start = transform * start;
-        let end = transform * end;
-
-        let radius = transform[0] * diameter / 2.0;
-        let direction = (start - end).normalize();
-
-        let perpendicular = {
-            let mut perpendicular = direction;
-            perpendicular.swap_rows(0, 1);
-            perpendicular.x *= -1.0;
-            perpendicular
-        } * radius;
-
-        let starting_point = start + perpendicular;
-
-        let segments = vec![
-            Segment::Move {
-                target: starting_point,
-            },
-            Segment::ClockwiseCurve {
-                end: start - perpendicular,
-                diameter,
-            },
-            Segment::Line {
-                end: end - perpendicular,
-            },
-            Segment::ClockwiseCurve {
-                end: end + perpendicular,
-                diameter,
-            },
-            Segment::Line {
-                end: start + perpendicular,
-            },
-        ];
-
-        Shape { polarity, segments }
-    }
-
-    fn square_line(
-        transform: Matrix2<f32>,
-        polarity: Polarity,
-        width: f32,
-        start: Vector2<f32>,
-        end: Vector2<f32>,
-    ) -> Self {
-        let start = transform * start;
-        let end = transform * end;
-
-        let half_width = transform[0] * width / 2.0;
-
-        let direction = (start - end).normalize();
-        let perpendicular = {
-            let mut perpendicular = direction;
-            perpendicular.swap_rows(0, 1);
-            perpendicular.x *= -1.0;
-            perpendicular
-        } * half_width;
-
-        let segments = vec![
-            Segment::Move {
-                target: start + perpendicular,
-            },
-            Segment::Line {
-                end: start - perpendicular,
-            },
-            Segment::Line {
-                end: end - perpendicular,
-            },
-            Segment::Line {
-                end: end + perpendicular,
-            },
-            Segment::Line {
-                end: start + perpendicular,
-            },
-        ];
-
-        Shape { polarity, segments }
-    }
-
-    fn add_hole(
-        transform: Matrix2<f32>,
-        shapes: &mut Vec<Shape>,
-        position: Vector2<f32>,
-        hole_diameter: Option<f32>,
-    ) {
-        if let Some(hole_diameter) = hole_diameter {
-            let position = transform * position;
-            let radius = transform[0] * hole_diameter / 2.0;
-            let starting_point = position + Vector2::new(radius, 0.0);
-
-            shapes.push(Shape {
-                polarity: Polarity::Clear,
-                segments: vec![
-                    Segment::Move {
-                        target: starting_point,
-                    },
-                    Segment::ClockwiseCurve {
-                        end: position - Vector2::new(radius, 0.0),
-                        diameter: hole_diameter,
-                    },
-                    Segment::ClockwiseCurve {
-                        end: starting_point,
-                        diameter: hole_diameter,
-                    },
-                ],
-            });
-        }
-    }
-
-    fn circle(
-        transform: Matrix2<f32>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
-        position: Vector2<f32>,
-        diameter: f32,
-        hole_diameter: Option<f32>,
-    ) {
-        let radius = diameter / 2.0;
-        let starting_point = position + Vector2::new(radius, 0.0);
-
-        shapes.push(Shape {
-            polarity,
-            segments: vec![
-                Segment::Move {
-                    target: starting_point,
-                },
-                Segment::ClockwiseCurve {
-                    end: position - Vector2::new(radius, 0.0),
-                    diameter,
-                },
-                Segment::ClockwiseCurve {
-                    end: starting_point,
-                    diameter,
-                },
-            ],
-        });
-
-        Self::add_hole(transform, shapes, position, hole_diameter);
-    }
-
-    fn rectangle(
-        transform: Matrix2<f32>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
-        position: Vector2<f32>,
-        width: f32,
-        height: f32,
-        hole_diameter: Option<f32>,
-    ) {
-        let half_width = width / 2.0;
-        let half_height = height / 2.0;
-
-        let left = position.x - half_width;
-        let right = position.x + half_width;
-        let bottom = position.y - half_height;
-        let top = position.y + half_height;
-
-        shapes.push(Shape {
-            polarity,
-            segments: vec![
-                Segment::Move {
-                    target: Vector2::new(right, bottom),
-                },
-                Segment::Line {
-                    end: transform * Vector2::new(right, top),
-                },
-                Segment::Line {
-                    end: transform * Vector2::new(left, top),
-                },
-                Segment::Line {
-                    end: transform * Vector2::new(left, bottom),
-                },
-                Segment::Line {
-                    end: transform * Vector2::new(right, bottom),
-                },
-            ],
-        });
-
-        Self::add_hole(transform, shapes, position, hole_diameter);
-    }
-
-    fn obround(
-        transform: Matrix2<f32>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
-        position: Vector2<f32>,
-        width: f32,
-        height: f32,
-        hole_diameter: Option<f32>,
-    ) {
-        let half_width = width / 2.0;
-        let half_height = height / 2.0;
-
-        let left = position.x - half_width;
-        let right = position.x + half_width;
-        let bottom = position.y - half_height + half_width;
-        let top = position.y + half_height - half_width;
-
-        shapes.push(Shape {
-            polarity,
-            segments: vec![
-                Segment::Move {
-                    target: Vector2::new(right, bottom),
-                },
-                Segment::Line {
-                    end: transform * Vector2::new(right, top),
-                },
-                Segment::CounterClockwiseCurve {
-                    end: transform * Vector2::new(left, top),
-                    diameter: transform[0] * half_width,
-                },
-                Segment::Line {
-                    end: transform * Vector2::new(left, bottom),
-                },
-                Segment::CounterClockwiseCurve {
-                    end: transform * Vector2::new(right, bottom),
-                    diameter: transform[0] * half_width,
-                },
-            ],
-        });
-
-        Self::add_hole(transform, shapes, position, hole_diameter);
-    }
-
-    fn polygon(
-        transform: Matrix2<f32>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
-        position: Vector2<f32>,
-        diameter: f32,
-        num_vertices: u32,
-        rotation: f32,
-        hole_diameter: Option<f32>,
-    ) -> Result<()> {
-        bail!("Unimplemented 1");
-
-        // Self::add_hole(transform, shapes, position, hole_diameter);
-    }
-
-    fn aperture_macro(
-        transform: Matrix2<f32>,
-        format: &Format,
-        shapes: &mut Vec<Shape>,
-        position: Vector2<f32>,
-        aperture_macro: &[MacroContent],
-        arguments: &[f32],
-    ) -> Result<()> {
-        let position = transform * position;
-        let mut variables: HashMap<u32, f32> = arguments
-            .iter()
-            .enumerate()
-            .map(|(index, value)| (index as u32 + 1, *value))
-            .collect();
-
-        for command in aperture_macro {
-            match command {
-                MacroContent::Comment(_comment) => {}
-                MacroContent::Circle {
-                    exposure,
-                    diameter,
-                    center_position: (x, y),
-                    angle,
-                } => {
-                    let transform = Rotation2::new(angle.evaluate(&variables)?.to_radians())
-                        .matrix()
-                        * transform;
-
-                    let center_position = transform
-                        * Vector2::new(x.evaluate(&variables)?, y.evaluate(&variables)?)
-                        + position;
-                    let diameter = diameter.evaluate(&variables)?;
-
-                    Shape::circle(
-                        transform,
-                        shapes,
-                        *exposure,
-                        center_position,
-                        diameter,
-                        None,
-                    );
-                }
-                MacroContent::VectorLine {
-                    exposure,
-                    width,
-                    start: (start_x, start_y),
-                    end: (end_x, end_y),
-                    angle,
-                } => {
-                    let transform = Rotation2::new(angle.evaluate(&variables)?.to_radians())
-                        .matrix()
-                        * transform;
-
-                    shapes.push(Shape::square_line(
-                        transform,
-                        *exposure,
-                        width.evaluate(&variables)?,
-                        Vector2::new(start_x.evaluate(&variables)?, start_y.evaluate(&variables)?)
-                            + position,
-                        Vector2::new(end_x.evaluate(&variables)?, end_y.evaluate(&variables)?)
-                            + position,
-                    ));
-                }
-                MacroContent::CenterLine {
-                    exposure,
-                    size,
-                    center,
-                    angle,
-                } => bail!("Unimplemented 3.2"),
-                MacroContent::Outline {
-                    exposure,
-                    coordinates,
-                    angle,
-                } => {
-                    let transform = Rotation2::new(angle.evaluate(&variables)?.to_radians())
-                        .matrix()
-                        * transform;
-
-                    let mut coordinate_iter =
-                        coordinates.iter().map(|(x, y)| -> Result<Vector2<f32>> {
-                            let x =
-                                format.internalize_coordinate_from_float(x.evaluate(&variables)?);
-                            let y =
-                                format.internalize_coordinate_from_float(y.evaluate(&variables)?);
-                            Ok(transform * Vector2::new(x, y) + position)
-                        });
-
-                    let starting_point = coordinate_iter
-                        .next()
-                        .context("Outline must have at least one point.")??;
-
-                    let segments = {
-                        let mut segments = vec![Segment::Move {
-                            target: starting_point,
-                        }];
-                        for end in coordinate_iter {
-                            let end = end?;
-                            segments.push(Segment::Line { end });
-                        }
-
-                        segments
-                    };
-
-                    shapes.push(Shape {
-                        polarity: *exposure,
-                        segments,
-                    });
-                }
-                MacroContent::Polygon {
-                    exposure,
-                    num_vertices,
-                    center_position,
-                    diameter,
-                    angle,
-                } => bail!("Unimplemented 3.4"),
-                MacroContent::Thermal {
-                    center_point,
-                    outer_diameter,
-                    inner_diameter,
-                    gap_thickness,
-                    angle,
-                } => bail!("Unimplemented 3.5"),
-                MacroContent::VariableDefinition {
-                    variable,
-                    expression,
-                } => bail!("Unimplemented 3.6"),
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-enum Segment {
-    Move { target: Vector2<f32> },
-    Line { end: Vector2<f32> },
-    ClockwiseCurve { end: Vector2<f32>, diameter: f32 },
-    CounterClockwiseCurve { end: Vector2<f32>, diameter: f32 },
-}
-
-impl Segment {
-    pub fn debug_render(&self) -> Box<dyn Command> {
-        match self {
-            Segment::Move { target } => Box::new(MoveTo {
-                point: (target.x as f64, target.y as f64),
-                coordinate_type: CoordinateType::Absolute,
-            }),
-            Segment::Line { end } => Box::new(LineTo {
-                point: (end.x as f64, end.y as f64),
-                option: LineToOption::Default,
-                coordinate_type: CoordinateType::Absolute,
-            }),
-            Segment::ClockwiseCurve { end, diameter } => Box::new(SvgArc {
-                radius: (*diameter as f64 / 2.0, *diameter as f64 / 2.0),
-                x_axis_rotation: 0.0,
-                large_arc_flag: false,
-                sweep_flag: false, // Clockwise
-                point: (end.x as f64, end.y as f64),
-                coordinate_type: CoordinateType::Absolute,
-            }),
-            Segment::CounterClockwiseCurve { end, diameter } => Box::new(SvgArc {
-                radius: (*diameter as f64 / 2.0, *diameter as f64 / 2.0),
-                x_axis_rotation: 0.0,
-                large_arc_flag: false,
-                sweep_flag: true, // CounterClockwise
-                point: (end.x as f64, end.y as f64),
-                coordinate_type: CoordinateType::Absolute,
-            }),
-        }
-    }
-
-    fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
-        match self {
-            Segment::Move { target } => (target.x, target.y, target.x, target.y),
-            Segment::Line { end } => (end.x, end.y, end.x, end.y),
-            Segment::ClockwiseCurve { end, diameter }
-            | Segment::CounterClockwiseCurve { end, diameter } => (
-                end.x - diameter * 2.0,
-                end.y - diameter * 2.0,
-                end.x + diameter * 2.0,
-                end.y + diameter * 2.0,
-            ),
-        }
+        let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
+        (min_x, min_y, max_x - min_x, max_y - min_y)
     }
 }
 
@@ -985,7 +440,7 @@ impl<'a> PlottingContext<'a> {
 
                             let mut shapes = Vec::new();
 
-                            let result = Shape::aperture_macro(
+                            let result = shape_from_aperture_macro(
                                 self.calculate_transformation_matrix(),
                                 &self.format,
                                 &mut shapes,
@@ -1026,9 +481,8 @@ impl<'a> PlottingContext<'a> {
 
                 let mut shape = Shape {
                     polarity: self.polarity,
-                    segments: vec![Segment::Move {
-                        target: self.current_point,
-                    }],
+                    starting_point: self.current_point,
+                    segments: Vec::new(),
                 };
 
                 for operation in operations {
@@ -1166,4 +620,130 @@ impl<'a> PlottingContext<'a> {
 
         matrix * self.scaling
     }
+}
+
+fn shape_from_aperture_macro(
+    transform: Matrix2<f32>,
+    format: &Format,
+    shapes: &mut Vec<Shape>,
+    position: Vector2<f32>,
+    aperture_macro: &[MacroContent],
+    arguments: &[f32],
+) -> Result<()> {
+    let position = transform * position;
+    let mut variables: HashMap<u32, f32> = arguments
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (index as u32 + 1, *value))
+        .collect();
+
+    for command in aperture_macro {
+        match command {
+            MacroContent::Comment(_comment) => {}
+            MacroContent::Circle {
+                exposure,
+                diameter,
+                center_position: (x, y),
+                angle,
+            } => {
+                let transform =
+                    Rotation2::new(angle.evaluate(&variables)?.to_radians()).matrix() * transform;
+
+                let center_position = transform
+                    * Vector2::new(x.evaluate(&variables)?, y.evaluate(&variables)?)
+                    + position;
+                let diameter = diameter.evaluate(&variables)?;
+
+                Shape::circle(
+                    transform,
+                    shapes,
+                    *exposure,
+                    center_position,
+                    diameter,
+                    None,
+                );
+            }
+            MacroContent::VectorLine {
+                exposure,
+                width,
+                start: (start_x, start_y),
+                end: (end_x, end_y),
+                angle,
+            } => {
+                let transform =
+                    Rotation2::new(angle.evaluate(&variables)?.to_radians()).matrix() * transform;
+
+                shapes.push(Shape::square_line(
+                    transform,
+                    *exposure,
+                    width.evaluate(&variables)?,
+                    Vector2::new(start_x.evaluate(&variables)?, start_y.evaluate(&variables)?)
+                        + position,
+                    Vector2::new(end_x.evaluate(&variables)?, end_y.evaluate(&variables)?)
+                        + position,
+                ));
+            }
+            MacroContent::CenterLine {
+                exposure,
+                size,
+                center,
+                angle,
+            } => bail!("Unimplemented 3.2"),
+            MacroContent::Outline {
+                exposure,
+                coordinates,
+                angle,
+            } => {
+                let transform =
+                    Rotation2::new(angle.evaluate(&variables)?.to_radians()).matrix() * transform;
+
+                let mut coordinate_iter =
+                    coordinates.iter().map(|(x, y)| -> Result<Vector2<f32>> {
+                        let x = format.internalize_coordinate_from_float(x.evaluate(&variables)?);
+                        let y = format.internalize_coordinate_from_float(y.evaluate(&variables)?);
+                        Ok(transform * Vector2::new(x, y) + position)
+                    });
+
+                let starting_point = coordinate_iter
+                    .next()
+                    .context("Outline must have at least one point.")??;
+
+                let segments = {
+                    let mut segments = Vec::new();
+                    for end in coordinate_iter {
+                        let end = end?;
+                        segments.push(Segment::Line { end });
+                    }
+
+                    segments
+                };
+
+                shapes.push(Shape {
+                    polarity: *exposure,
+                    starting_point,
+                    segments,
+                });
+            }
+            MacroContent::Polygon {
+                exposure,
+                num_vertices,
+                center_position,
+                diameter,
+                angle,
+            } => bail!("Unimplemented 3.4"),
+            MacroContent::Thermal {
+                center_point,
+                outer_diameter,
+                inner_diameter,
+                gap_thickness,
+                angle,
+            } => bail!("Unimplemented 3.5"),
+            MacroContent::VariableDefinition {
+                variable,
+                expression,
+            } => bail!("Unimplemented 3.6"),
+        }
+    }
+
+    Ok(())
 }

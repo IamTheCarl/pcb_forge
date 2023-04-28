@@ -1,7 +1,10 @@
 use camino::Utf8PathBuf;
 use std::collections::HashMap;
 use uom::si::{
-    angular_velocity::AngularVelocity, length::Length, power::Power, velocity::Velocity,
+    angular_velocity::AngularVelocity,
+    length::{millimeter, Length},
+    power::Power,
+    velocity::Velocity,
 };
 
 use nalgebra::Vector2;
@@ -43,9 +46,16 @@ pub struct JobConfig {
     /// For a laser cutter, this should represent the laser.
     pub tool: Utf8PathBuf,
 
+    #[serde(default = "distance_per_step_default")]
+    pub distance_per_step: Length<uom::si::SI<f32>, f32>,
+
     /// The power of the tool. The unit depends on the tool.
     #[serde(flatten)]
     pub tool_power: ToolConfig,
+}
+
+fn distance_per_step_default() -> Length<uom::si::SI<f32>, f32> {
+    Length::new::<millimeter>(0.1)
 }
 
 #[derive(Debug, Deserialize)]

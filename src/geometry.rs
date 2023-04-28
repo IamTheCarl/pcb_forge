@@ -1,200 +1,15 @@
 use std::collections::HashMap;
 
 use anyhow::{bail, Result};
+use geo::{Coord, LineString, Polygon};
 use nalgebra::{Matrix2, Vector2};
 use ordered_float::NotNan;
-use svg_composer::{
-    document::Document as SvgDocument,
-    element::{
-        attributes::{Color, ColorName, Paint, Size},
-        path::{
-            command::{Arc as SvgArc, CoordinateType, End, LineTo, LineToOption, MoveTo},
-            Command, Path as SvgPath,
-        },
-        Element,
-    },
-};
-use uom::si::{
-    length::{millimeter, Length},
-    ratio::{percent, Ratio},
-    velocity::{millimeter_per_second, Velocity},
+use svg_composer::element::path::{
+    command::{Arc as SvgArc, CoordinateType, LineTo, LineToOption, MoveTo},
+    Command,
 };
 
-use crate::{
-    config::machine::JobConfig,
-    gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
-    parsing::gerber::{Polarity, UnitMode},
-};
-
-pub struct ShapeCollection {
-    pub shapes: Vec<Shape>,
-}
-
-impl ShapeCollection {
-    pub fn debug_render(&self, svg: &mut SvgDocument, include_outline: bool) -> Result<()> {
-        for (index, shape) in self.shapes.iter().enumerate() {
-            let mut commands = Vec::new();
-
-            shape.debug_render(&mut commands)?;
-
-            commands.push(Box::new(End {}));
-
-            let color = match shape.polarity {
-                Polarity::Clear => Color::from_rgba(0, (index % 255) as u8, 255, 128),
-                Polarity::Dark => Color::from_rgba(255, (index % 255) as u8, 0, 128),
-            };
-
-            let path = if !include_outline {
-                SvgPath::new()
-                    .set_fill(Paint::from_color(color))
-                    .add_commands(commands)
-            } else {
-                SvgPath::new()
-                    .set_stroke(Paint::from_color(Color::from_name(ColorName::Blue)))
-                    .set_stroke_width(Size::from_length(0.02))
-                    .set_fill(Paint::from_color(color))
-                    .add_commands(commands)
-            };
-
-            svg.add_element(Box::new(path));
-        }
-
-        Ok(())
-    }
-
-    pub fn calculate_svg_bounds(&self) -> (f32, f32, f32, f32) {
-        if !self.shapes.is_empty() {
-            let mut min_x = f32::MAX;
-            let mut min_y = f32::MAX;
-            let mut max_x = f32::MIN;
-            let mut max_y = f32::MIN;
-
-            for shape in self.shapes.iter() {
-                let (local_min_x, local_min_y, local_max_x, local_max_y) = shape.calculate_bounds();
-                min_x = min_x.min(local_min_x);
-                min_y = min_y.min(local_min_y);
-                max_x = max_x.max(local_max_x);
-                max_y = max_y.max(local_max_y);
-            }
-
-            (min_x, min_y, max_x - min_x, max_y - min_y)
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        }
-    }
-
-    pub fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
-        if !self.shapes.is_empty() {
-            let mut min_x = f32::MAX;
-            let mut min_y = f32::MAX;
-            let mut max_x = f32::MIN;
-            let mut max_y = f32::MIN;
-
-            for shape in self.shapes.iter() {
-                let (local_min_x, local_min_y, local_max_x, local_max_y) = shape.calculate_bounds();
-                min_x = min_x.min(local_min_x);
-                min_y = min_y.min(local_min_y);
-                max_x = max_x.max(local_max_x);
-                max_y = max_y.max(local_max_y);
-            }
-
-            (min_x, min_y, max_x, max_y)
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        }
-    }
-
-    pub fn generate_gcode(
-        &self,
-        job_config: &JobConfig,
-        tool_config: &ToolSelection,
-    ) -> Result<GCodeFile> {
-        match job_config.tool_power {
-            crate::config::machine::ToolConfig::Laser {
-                laser_power,
-                work_speed,
-            } => {
-                let mut commands = vec![
-                    GCommand::AbsoluteMode,
-                    GCommand::UnitMode(UnitMode::Metric),
-                    GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
-                        3000.0, // TODO this should come from the config file.
-                    )),
-                    GCommand::SetWorkSpeed(work_speed),
-                    GCommand::SetPower(laser_power),
-                    GCommand::SetFanPower {
-                        index: 0,
-                        power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                    },
-                ];
-
-                // Start by generating GCode for the outlines.
-                // FIXME this needs to account for the beam diameter.
-                for shape in self.shapes.iter() {
-                    commands.push(GCommand::MoveTo {
-                        target: (
-                            Length::new::<millimeter>(shape.starting_point.x),
-                            Length::new::<millimeter>(shape.starting_point.y),
-                        ),
-                    });
-
-                    for segment in shape.segments.iter() {
-                        match segment {
-                            Segment::Line { end } => {
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::Linear,
-                                    target: (
-                                        Length::new::<millimeter>(end.x),
-                                        Length::new::<millimeter>(end.y),
-                                    ),
-                                });
-                            }
-                            Segment::ClockwiseCurve { end, diameter } => {
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::ClockwiseCurve {
-                                        diameter: Length::new::<millimeter>(*diameter),
-                                    },
-                                    target: (
-                                        Length::new::<millimeter>(end.x),
-                                        Length::new::<millimeter>(end.y),
-                                    ),
-                                });
-                            }
-                            Segment::CounterClockwiseCurve { end, diameter } => {
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::CounterClockwiseCurve {
-                                        diameter: Length::new::<millimeter>(*diameter),
-                                    },
-                                    target: (
-                                        Length::new::<millimeter>(end.x),
-                                        Length::new::<millimeter>(end.y),
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                }
-
-                // TODO Now we generate the infill.
-                let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
-                let (span_x, span_y) = (max_x - min_x, max_y - min_y);
-                // let (delta_x, delta_y) = (span_x / tool_config)
-
-                Ok(GCodeFile::new(laser_power, commands))
-            }
-            crate::config::machine::ToolConfig::Drill {
-                spindle_rpm: _,
-                plunge_speed: _,
-            } => bail!("gerber files cannot be drilled"),
-            crate::config::machine::ToolConfig::EndMill {
-                spindle_rpm,
-                max_cut_depth,
-                plunge_speed,
-                work_speed,
-            } => bail!("milling gerber files is not yet supported"),
-        }
-    }
-}
+use crate::parsing::gerber::Polarity;
 
 #[derive(Debug)]
 pub struct Shape {
@@ -234,7 +49,19 @@ impl Shape {
         (min_x, min_y, max_x, max_y)
     }
 
-    pub fn simplify(&self) -> Vec<Shape> {
+    fn convert_to_line_string(&self, distance_per_step: f32) -> LineString<f32> {
+        let mut points = Vec::new();
+
+        let mut start_point = self.starting_point;
+        for segment in self.segments.iter() {
+            segment.append_to_line_string(distance_per_step, start_point, &mut points);
+            start_point = segment.end();
+        }
+
+        LineString(points)
+    }
+
+    pub fn convert_to_geo_polygon(&self, distance_per_step: f32) -> Polygon<f32> {
         // Start by separating the internal holes from the outer shape.
         #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
         enum SegmentInfo {
@@ -343,14 +170,12 @@ impl Shape {
             collected_segments.push(segment.clone());
         }
 
-        shapes.insert(
-            0,
-            Shape {
-                polarity: self.polarity,
-                starting_point: self.starting_point,
-                segments: collected_segments,
-            },
-        );
+        // The last shape should always be the outer line string.
+        shapes.push(Shape {
+            polarity: self.polarity,
+            starting_point: self.starting_point,
+            segments: collected_segments,
+        });
 
         // Remove redundant vertices.
         for shape in shapes.iter_mut() {
@@ -398,12 +223,15 @@ impl Shape {
             shape.segments = segments;
         }
 
-        shapes
-    }
+        let outer_shape = shapes.pop().unwrap();
 
-    pub fn merge(&self, shape: &Shape) -> Option<Shape> {
-        // todo!()
-        None
+        Polygon::new(
+            outer_shape.convert_to_line_string(distance_per_step),
+            shapes
+                .drain(..)
+                .map(|shape| shape.convert_to_line_string(distance_per_step))
+                .collect(),
+        )
     }
 
     pub fn line(
@@ -708,7 +536,106 @@ impl Segment {
         }
     }
 
-    fn contains_point_test(&self, segment_start: Vector2<f32>, point: Vector2<f32>) -> bool {
-        todo!()
+    fn append_to_line_string(
+        &self,
+        distance_per_step: f32,
+        start: Vector2<f32>,
+        points: &mut Vec<Coord<f32>>,
+    ) {
+        enum ArchDirection {
+            Clockwise,
+            CounterClockwise,
+        }
+
+        fn arc_to_cords(
+            distance_per_step: f32,
+            start: Vector2<f32>,
+            end: Vector2<f32>,
+            diameter: f32,
+            direction: ArchDirection,
+            points: &mut Vec<Coord<f32>>,
+        ) {
+            let radius = diameter / 2.0;
+            let chord = end - start;
+            let chord_length = chord.norm();
+            let chord_direction = chord.normalize();
+            let chord_middle = start + (chord_length / 2.0) * chord_direction;
+            let center_direction = Vector2::new(chord_direction.y, -chord_direction.x);
+            let apothem = (radius.powi(2) - (chord_length.powi(2) / 4.0))
+                .max(0.0)
+                .sqrt();
+            let center = if matches!(direction, ArchDirection::Clockwise) {
+                chord_middle + center_direction * apothem
+            } else {
+                chord_middle - center_direction * apothem
+            };
+
+            let center_to_start = start - center;
+            let center_to_end = end - center;
+
+            let dot_product = center_to_start.dot(&center_to_end);
+
+            let starting_radius = center_to_start.norm();
+            let ending_radius = center_to_end.norm();
+            let radius_delta = ending_radius - starting_radius;
+
+            let angle = (dot_product / (starting_radius * ending_radius))
+                .clamp(-1.0, 1.0)
+                .acos();
+
+            let starting_angle = (start.y - center.y).atan2(start.x - center.x);
+
+            let arch_length = angle * starting_radius.max(ending_radius);
+            let steps = (arch_length / distance_per_step).ceil();
+
+            let angle_direction = if matches!(direction, ArchDirection::Clockwise) {
+                -1.0
+            } else {
+                1.0
+            };
+
+            let angle_step = (angle / steps) * angle_direction;
+            let radius_step = radius_delta / steps;
+
+            let steps = steps as usize;
+
+            for step_index in 0..steps {
+                let angle = starting_angle + angle_step * step_index as f32;
+                let radius = starting_radius + radius_step * step_index as f32;
+
+                let (sin, cos) = angle.sin_cos();
+                let offset = Vector2::new(cos, sin) * radius;
+
+                let new_position = center + offset;
+                points.push(Coord {
+                    x: new_position.x,
+                    y: new_position.y,
+                })
+            }
+
+            points.push(Coord { x: end.x, y: end.y });
+        }
+
+        match self {
+            Segment::Line { end } => {
+                points.push(Coord { x: end.x, y: end.y });
+            }
+            Segment::ClockwiseCurve { end, diameter } => arc_to_cords(
+                distance_per_step,
+                start,
+                *end,
+                *diameter,
+                ArchDirection::Clockwise,
+                points,
+            ),
+            Segment::CounterClockwiseCurve { end, diameter } => arc_to_cords(
+                distance_per_step,
+                start,
+                *end,
+                *diameter,
+                ArchDirection::CounterClockwise,
+                points,
+            ),
+        }
     }
 }

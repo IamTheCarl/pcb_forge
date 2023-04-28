@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use geo::{BooleanOps, Coord, MultiPolygon};
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use std::{collections::HashMap, fs, ops::Deref, path::Path};
 use svg_composer::{
@@ -9,10 +10,16 @@ use svg_composer::{
         Element, Path as SvgPath,
     },
 };
-use uom::si::length::{mil, millimeter, Length};
+use uom::si::{
+    length::{mil, millimeter, Length},
+    ratio::{percent, Ratio},
+    velocity::{millimeter_per_second, Velocity},
+};
 
 use crate::{
-    geometry::{Segment, Shape, ShapeCollection},
+    config::machine::JobConfig,
+    gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
+    geometry::{Segment, Shape},
     parsing::gerber::{
         parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
         Operation, Polarity, Span, UnitMode,
@@ -32,39 +39,99 @@ impl GerberFile {
             .chain(self.aperture_macro_flashes.iter().flatten())
     }
 
-    pub fn simplify(&self) -> ShapeCollection {
-        let mut shapes = Vec::new();
+    pub fn generate_gcode(
+        &self,
+        job_config: &JobConfig,
+        tool_config: &ToolSelection,
+    ) -> Result<GCodeFile> {
+        let distance_per_step = job_config.distance_per_step.get::<millimeter>();
+
+        let mut polygon = Vec::new();
 
         // Iterate all our shapes *and* the macro flashes within.
         for shape in self.iter_all_shapes() {
-            let mut new_shapes = shape.simplify();
-            shapes.append(&mut new_shapes);
+            polygon.push(shape.convert_to_geo_polygon(distance_per_step));
         }
 
-        // Merge shapes.
-        let mut merged_shapes = Vec::new();
-        while let Some(mut to_merge) = shapes.pop() {
-            let mut index = 0;
-            while index < shapes.len() {
-                let shape = &shapes[index];
-                if let Some(merged) = to_merge.merge(shape) {
-                    to_merge = merged;
-                    shapes.remove(index);
-                    index = 0;
-                } else {
-                    index += 1;
+        let union = polygon
+            .iter()
+            .fold(MultiPolygon::new(vec![]), |previous, polygon| {
+                let polygon = MultiPolygon::new(vec![polygon.clone()]);
+                previous.union(&polygon)
+            });
+        // let union = MultiPolygon::new(polygon);
+
+        match job_config.tool_power {
+            crate::config::machine::ToolConfig::Laser {
+                laser_power,
+                work_speed,
+            } => {
+                let mut commands = vec![
+                    GCommand::AbsoluteMode,
+                    GCommand::UnitMode(UnitMode::Metric),
+                    GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
+                        3000.0, // TODO this should come from the config file.
+                    )),
+                    GCommand::SetWorkSpeed(work_speed),
+                    GCommand::SetPower(laser_power),
+                    GCommand::SetFanPower {
+                        index: 0,
+                        power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                    },
+                ];
+
+                // Start by generating GCode for the outlines.
+
+                fn add_point_string<'a>(
+                    commands: &mut Vec<GCommand>,
+                    mut point_iter: impl Iterator<Item = &'a Coord<f32>>,
+                ) {
+                    if let Some(first_point) = point_iter.next() {
+                        commands.push(GCommand::MoveTo {
+                            target: (
+                                Length::new::<millimeter>(first_point.x),
+                                Length::new::<millimeter>(first_point.y),
+                            ),
+                        })
+                    }
+
+                    for point in point_iter {
+                        commands.push(GCommand::Cut {
+                            movement: MovementType::Linear,
+                            target: (
+                                Length::new::<millimeter>(point.x),
+                                Length::new::<millimeter>(point.y),
+                            ),
+                        })
+                    }
                 }
+
+                let polygon = union.0;
+                for polygon in polygon.iter() {
+                    add_point_string(&mut commands, polygon.exterior().0.iter());
+
+                    for interior in polygon.interiors() {
+                        add_point_string(&mut commands, interior.0.iter());
+                    }
+                }
+
+                // // TODO Now we generate the infill.
+                // let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
+                // let (span_x, span_y) = (max_x - min_x, max_y - min_y);
+                // // let (delta_x, delta_y) = (span_x / tool_config)
+
+                Ok(GCodeFile::new(laser_power, commands))
             }
-
-            merged_shapes.push(to_merge);
-        }
-
-        // Not actually necessary but it makes debugging a little easier since now things will render in the same order
-        // as if we hadn't done the merge.
-        merged_shapes.reverse();
-
-        ShapeCollection {
-            shapes: merged_shapes,
+            crate::config::machine::ToolConfig::Drill {
+                spindle_rpm: _,
+                plunge_speed: _,
+            } => bail!("gerber files cannot be drilled"),
+            crate::config::machine::ToolConfig::EndMill {
+                spindle_rpm,
+                max_cut_depth,
+                plunge_speed,
+                work_speed,
+            } => bail!("milling gerber files is not yet supported"),
         }
     }
 

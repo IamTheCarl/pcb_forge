@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 mod arguments;
 mod config;
 use config::Config;
+use uom::si::length::{millimeter, Length};
 mod gcode_generation;
 mod geometry;
 mod gerber_file;
@@ -18,6 +19,7 @@ mod forge_file;
 
 fn main() {
     simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Info)
         .init()
         .expect("Failed to initialize logger.");
 
@@ -168,9 +170,6 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 // Okay cool, now you can handle the error.
                 load_result?;
 
-                // Let's try to simplify it.
-                let gerber = gerber.simplify();
-
                 // Debug render if applicable.
                 if let Some(debug_output_directory) = debug_output_directory.as_ref() {
                     let output_file = debug_output_directory.join("gerber_simplified.svg");
@@ -189,6 +188,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                         .context("Failed to save gerber debug SVG file.")?;
                 }
 
+                // TODO distance_per_step should come from a config file.
                 let gcode_file = gerber
                     .generate_gcode(job_config, &tool_selection)
                     .context("Failed to generate GCode file.")?;

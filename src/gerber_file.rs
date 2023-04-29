@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use geo::{BooleanOps, BoundingRect, ClosestPoint, Contains, Coord, Line, MultiPolygon};
+use geo::{BooleanOps, BoundingRect, Contains, Coord, MultiPolygon};
 use geo_offset::Offset;
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use progress_bar::*;
@@ -19,7 +19,7 @@ use uom::si::{
 };
 
 use crate::{
-    config::machine::{JobConfig, ToolConfig},
+    config::machine::JobConfig,
     gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
     geometry::{Segment, Shape},
     parsing::gerber::{
@@ -43,9 +43,11 @@ impl GerberFile {
 
     pub fn generate_gcode(
         &self,
+        commands: &mut Vec<GCommand>,
         job_config: &JobConfig,
         tool_config: &ToolSelection,
-    ) -> Result<GCodeFile> {
+        generate_infill: bool,
+    ) -> Result<()> {
         log::info!("Simplifying geometry.");
         let distance_per_step = job_config.distance_per_step.get::<millimeter>();
 
@@ -75,19 +77,28 @@ impl GerberFile {
                 work_speed,
             } => {
                 if let ToolSelection::Laser { laser } = tool_config {
-                    let mut commands = vec![
-                        GCommand::AbsoluteMode,
-                        GCommand::UnitMode(UnitMode::Metric),
-                        GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
-                            3000.0, // TODO this should come from the config file.
-                        )),
-                        GCommand::SetWorkSpeed(work_speed),
-                        GCommand::SetPower(laser_power),
-                        GCommand::SetFanPower {
-                            index: 0,
-                            power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                        },
-                    ];
+                    commands.extend(
+                        [
+                            GCommand::EquipLaser {
+                                max_power: laser.max_power,
+                            },
+                            GCommand::AbsoluteMode,
+                            GCommand::UnitMode(UnitMode::Metric),
+                            GCommand::SetRapidTransverseSpeed(
+                                Velocity::new::<millimeter_per_second>(
+                                    3000.0, // TODO this should come from the config file.
+                                ),
+                            ),
+                            GCommand::SetWorkSpeed(work_speed),
+                            GCommand::SetPower(laser_power),
+                            GCommand::SetFanPower {
+                                index: 0,
+                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                            },
+                        ]
+                        .iter()
+                        .cloned(),
+                    );
 
                     // Start by generating GCode for the outlines.
 
@@ -118,10 +129,10 @@ impl GerberFile {
                     {
                         let polygon = &polygon.0;
                         for polygon in polygon.iter() {
-                            add_point_string(&mut commands, polygon.exterior().0.iter());
+                            add_point_string(commands, polygon.exterior().0.iter());
 
                             for interior in polygon.interiors() {
-                                add_point_string(&mut commands, interior.0.iter());
+                                add_point_string(commands, interior.0.iter());
                             }
                         }
                     }
@@ -262,7 +273,7 @@ impl GerberFile {
                         finalize_progress_bar();
                     }
 
-                    Ok(GCodeFile::new(laser.max_power, commands))
+                    Ok(())
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }

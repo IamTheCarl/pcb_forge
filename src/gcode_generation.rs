@@ -1,5 +1,6 @@
-use std::fmt::Display;
+use std::fmt::Write;
 
+use anyhow::{Context, Result};
 use uom::si::{
     f64::Ratio,
     length::{mil, millimeter, Length},
@@ -13,7 +14,12 @@ use crate::{
     parsing::gerber::UnitMode,
 };
 
+#[derive(Debug, Clone)]
 pub enum GCommand {
+    EquipLaser {
+        max_power: Power<uom::si::SI<f64>, f64>,
+    },
+    RemoveTool,
     AbsoluteMode,
     SetRapidTransverseSpeed(Velocity<uom::si::SI<f64>, f64>),
     SetWorkSpeed(Velocity<uom::si::SI<f64>, f64>),
@@ -32,6 +38,7 @@ pub enum GCommand {
     },
 }
 
+#[derive(Debug, Clone)]
 pub enum MovementType {
     Linear,
     ClockwiseCurve {
@@ -43,19 +50,31 @@ pub enum MovementType {
 }
 
 pub struct GCodeFile {
-    max_power: Power<uom::si::SI<f64>, f64>,
     commands: Vec<GCommand>,
 }
 
-impl Display for GCodeFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl GCodeFile {
+    pub fn to_string(&self) -> Result<String> {
         let mut unit_mode = UnitMode::Metric;
+        let mut max_power = None;
+
+        let mut output = String::default();
 
         for command in self.commands.iter() {
             match command {
-                GCommand::AbsoluteMode => writeln!(f, "G90"),
+                GCommand::EquipLaser {
+                    max_power: new_max_power,
+                } => {
+                    max_power = Some(*new_max_power);
+                    Ok(())
+                }
+                GCommand::RemoveTool => {
+                    max_power = None;
+                    Ok(())
+                }
+                GCommand::AbsoluteMode => writeln!(&mut output, "G90"),
                 GCommand::SetRapidTransverseSpeed(speed) => writeln!(
-                    f,
+                    &mut output,
                     "G0 F{}",
                     match unit_mode {
                         UnitMode::Metric => speed.get::<millimeter_per_second>(),
@@ -63,7 +82,7 @@ impl Display for GCodeFile {
                     }
                 ),
                 GCommand::SetWorkSpeed(speed) => writeln!(
-                    f,
+                    &mut output,
                     "G1 F{}",
                     match unit_mode {
                         UnitMode::Metric => speed.get::<millimeter_per_second>(),
@@ -71,17 +90,17 @@ impl Display for GCodeFile {
                     }
                 ),
                 GCommand::SetPower(power) => {
-                    let power_ratio = *power / self.max_power;
+                    let power_ratio = *power / max_power.context("Laser was not equipped")?;
                     let percentage = (100.0 * power_ratio.get::<ratio>()) as usize;
                     let pwm_scale = (255.0 * power_ratio.get::<ratio>()) as usize;
 
-                    writeln!(f, "M3 P{} S{}", percentage, pwm_scale)
+                    writeln!(&mut output, "M3 P{} S{}", percentage, pwm_scale)
                 }
                 GCommand::Cut {
                     movement,
                     target: (x, y),
                 } => {
-                    writeln!(f, "M3")?;
+                    writeln!(&mut output, "M3")?;
 
                     let (x, y) = match unit_mode {
                         UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
@@ -89,7 +108,7 @@ impl Display for GCodeFile {
                     };
 
                     match movement {
-                        MovementType::Linear => writeln!(f, "G1 X{} Y{}", x, y),
+                        MovementType::Linear => writeln!(&mut output, "G1 X{} Y{}", x, y),
                         MovementType::ClockwiseCurve { diameter } => {
                             let radius = *diameter / 2.0;
                             let radius = match unit_mode {
@@ -97,7 +116,7 @@ impl Display for GCodeFile {
                                 UnitMode::Imperial => radius.get::<mil>(),
                             };
 
-                            writeln!(f, "G2 X{} Y{} R{}", x, y, radius)
+                            writeln!(&mut output, "G2 X{} Y{} R{}", x, y, radius)
                         }
                         MovementType::CounterClockwiseCurve { diameter } => {
                             let radius = *diameter / 2.0;
@@ -106,48 +125,45 @@ impl Display for GCodeFile {
                                 UnitMode::Imperial => radius.get::<mil>(),
                             };
 
-                            writeln!(f, "G3 X{} Y{} R{}", x, y, radius)
+                            writeln!(&mut output, "G3 X{} Y{} R{}", x, y, radius)
                         }
                     }
                 }
                 GCommand::MoveTo { target: (x, y) } => {
-                    writeln!(f, "M5")?;
+                    writeln!(&mut output, "M5")?;
 
                     let (x, y) = match unit_mode {
                         UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
                         UnitMode::Imperial => (x.get::<mil>(), y.get::<mil>()),
                     };
 
-                    writeln!(f, "G0 X{} Y{}", x, y)
+                    writeln!(&mut output, "G0 X{} Y{}", x, y)
                 }
                 GCommand::UnitMode(new_mode) => {
                     unit_mode = *new_mode;
                     match new_mode {
-                        UnitMode::Metric => writeln!(f, "G21"),
-                        UnitMode::Imperial => writeln!(f, "G22"),
+                        UnitMode::Metric => writeln!(&mut output, "G21"),
+                        UnitMode::Imperial => writeln!(&mut output, "G22"),
                     }
                 }
                 GCommand::SetFanPower { index, power } => {
                     if *power > Ratio::new::<ratio>(0.0) {
                         let power = (255.0 * power.get::<ratio>()) as usize;
-                        writeln!(f, "G106 P{}, S{}", index, power)
+                        writeln!(&mut output, "G106 P{}, S{}", index, power)
                     } else {
-                        writeln!(f, "G107 P{}", index)
+                        writeln!(&mut output, "G107 P{}", index)
                     }
                 }
             }?;
         }
 
-        Ok(())
+        Ok(output)
     }
 }
 
 impl GCodeFile {
-    pub fn new(max_power: Power<uom::si::SI<f64>, f64>, commands: Vec<GCommand>) -> Self {
-        Self {
-            max_power,
-            commands,
-        }
+    pub fn new(commands: Vec<GCommand>) -> Self {
+        Self { commands }
     }
 }
 

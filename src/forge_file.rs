@@ -40,11 +40,13 @@ pub enum Stage {
     #[serde(rename = "engrave_mask")]
     EngraveMask {
         machine_config: Option<Utf8PathBuf>,
+        gcode_file: PathBuf,
         gerber_file: PathBuf,
     },
     #[serde(rename = "cut_board")]
     CutBoard {
         machine_config: Option<Utf8PathBuf>,
+        gcode_file: PathBuf,
 
         #[serde(flatten)]
         file: CutBoardFile,

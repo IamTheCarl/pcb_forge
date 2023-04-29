@@ -1,4 +1,4 @@
-use std::fs;
+use std::{collections::HashMap, fs};
 
 use anyhow::{bail, Context, Result};
 
@@ -12,7 +12,9 @@ mod gerber_file;
 mod parsing;
 
 use crate::{
-    config::machine::Tool, forge_file::ForgeFile, gcode_generation::ToolSelection,
+    config::machine::Tool,
+    forge_file::ForgeFile,
+    gcode_generation::{GCodeFile, ToolSelection},
     gerber_file::GerberFile,
 };
 mod forge_file;
@@ -55,6 +57,8 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
         .context("Failed to load forge file.")?;
 
+    let mut gcode_files = HashMap::new();
+
     for (stage_index, stage) in forge_file.stages.iter().enumerate() {
         let debug_output_directory = if build_configuration.debug {
             let debug_output_directory = build_configuration
@@ -75,7 +79,10 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
             forge_file::Stage::EngraveMask {
                 machine_config,
                 gerber_file,
+                gcode_file,
             } => {
+                let gcode = gcode_files.entry(gcode_file.clone()).or_default();
+
                 log::info!("Process engrave stage: {:?}", gerber_file);
                 let machine_config_path = machine_config
                     .as_ref()
@@ -201,24 +208,28 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 }
 
                 // TODO distance_per_step should come from a config file.
-                let gcode_file = gerber
-                    .generate_gcode(job_config, &tool_selection)
+                gerber
+                    .generate_gcode(gcode, job_config, &tool_selection, true)
                     .context("Failed to generate GCode file.")?;
-
-                let output_file = build_configuration
-                    .target_directory
-                    .join(format!("stage{}.gcode", stage_index));
-                fs::write(output_file, format!("{}", gcode_file))
-                    .context("Failed to save GCode file.")?;
             }
             forge_file::Stage::CutBoard {
                 machine_config,
+                gcode_file,
                 file,
             } => {
                 // TODO
                 log::info!("Process cutting stage: {}", file);
             }
         }
+    }
+
+    for (path, commands) in gcode_files {
+        let output_file = build_configuration.target_directory.join(&path);
+        let gcode_file = GCodeFile::new(commands);
+        let output = gcode_file
+            .to_string()
+            .with_context(|| format!("Failed to produce GCode for file: {:?}", path))?;
+        fs::write(output_file, output).context("Failed to save GCode file.")?;
     }
 
     Ok(())

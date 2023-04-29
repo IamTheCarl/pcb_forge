@@ -1,5 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use geo::{BooleanOps, BoundingRect, ClosestPoint, Contains, Coord, Line, MultiPolygon};
+use geo_offset::Offset;
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use progress_bar::*;
 use std::{collections::HashMap, fs, ops::Deref, path::Path};
@@ -63,6 +64,11 @@ impl GerberFile {
             });
         // let polygon = MultiPolygon::new(polygon);
 
+        // Apply offsets from laser.
+        let polygon = polygon
+            .offset(tool_config.diameter().get::<millimeter>() / 2.0)
+            .map_err(|error| anyhow!("Failed to apply beam offset: {:?}", error))?;
+
         match job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
                 laser_power,
@@ -87,7 +93,7 @@ impl GerberFile {
 
                     fn add_point_string<'a>(
                         commands: &mut Vec<GCommand>,
-                        mut point_iter: impl Iterator<Item = &'a Coord<f32>>,
+                        mut point_iter: impl Iterator<Item = &'a Coord<f64>>,
                     ) {
                         if let Some(first_point) = point_iter.next() {
                             commands.push(GCommand::MoveTo {
@@ -135,8 +141,8 @@ impl GerberFile {
 
                     {
                         struct InfillLine {
-                            start: Vector2<f32>,
-                            end: Vector2<f32>,
+                            start: Vector2<f64>,
+                            end: Vector2<f64>,
                         }
 
                         init_progress_bar(
@@ -191,7 +197,7 @@ impl GerberFile {
                         let mut last_position = Vector2::new(min_x, min_y);
 
                         while !lines.is_empty() {
-                            let mut last_distance = f32::INFINITY;
+                            let mut last_distance = f64::INFINITY;
                             let mut line_selection = LineSelection::None;
 
                             for (line_index, line) in lines.iter().enumerate() {
@@ -305,12 +311,12 @@ impl GerberFile {
         Ok(())
     }
 
-    fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
+    fn calculate_bounds(&self) -> (f64, f64, f64, f64) {
         if !self.shapes.is_empty() {
-            let mut min_x = f32::MAX;
-            let mut min_y = f32::MAX;
-            let mut max_x = f32::MIN;
-            let mut max_y = f32::MIN;
+            let mut min_x = f64::MAX;
+            let mut min_y = f64::MAX;
+            let mut max_x = f64::MIN;
+            let mut max_y = f64::MIN;
 
             for shape in self.iter_all_shapes() {
                 let (local_min_x, local_min_y, local_max_x, local_max_y) = shape.calculate_bounds();
@@ -326,7 +332,7 @@ impl GerberFile {
         }
     }
 
-    pub fn calculate_svg_bounds(&self) -> (f32, f32, f32, f32) {
+    pub fn calculate_svg_bounds(&self) -> (f64, f64, f64, f64) {
         let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
         (min_x, min_y, max_x - min_x, max_y - min_y)
     }
@@ -405,7 +411,7 @@ struct Format {
 }
 
 impl Format {
-    fn internalize_coordinate_from_span(&self, coordinate: Span) -> Result<f32> {
+    fn internalize_coordinate_from_span(&self, coordinate: Span) -> Result<f64> {
         // Get decimal part.
         let decimal = coordinate
             .get(
@@ -433,18 +439,18 @@ impl Format {
         };
 
         // Combine.
-        let new_position = sign as f32
-            * (integer as f32 + (decimal as f32 / (10.0f32.powi(self.decimal_digits as i32))));
+        let new_position = sign as f64
+            * (integer as f64 + (decimal as f64 / (10.0f64.powi(self.decimal_digits as i32))));
 
         // Convert to mm for internal representation.
         Ok(self.internalize_coordinate_from_float(new_position))
     }
 
-    fn internalize_coordinate_from_float(&self, coordinate: f32) -> f32 {
+    fn internalize_coordinate_from_float(&self, coordinate: f64) -> f64 {
         // Convert to mm for internal representation.
         match self.unit_mode {
-            UnitMode::Metric => Length::<uom::si::SI<f32>, f32>::new::<millimeter>(coordinate),
-            UnitMode::Imperial => Length::<uom::si::SI<f32>, f32>::new::<mil>(coordinate),
+            UnitMode::Metric => Length::<uom::si::SI<f64>, f64>::new::<millimeter>(coordinate),
+            UnitMode::Imperial => Length::<uom::si::SI<f64>, f64>::new::<mil>(coordinate),
         }
         .get::<millimeter>()
     }
@@ -467,15 +473,15 @@ struct PlottingContext<'a> {
     aperture_macros: HashMap<&'a str, Vec<MacroContent<'a>>>,
     aperture_definitions: HashMap<u32, ApertureTemplate<'a>>,
 
-    current_point: Vector2<f32>,
+    current_point: Vector2<f64>,
     current_aperture: u32,
     draw_mode: DrawMode,
     format: Format,
 
     polarity: Polarity,
     mirroring: MirroringMode,
-    rotation: f32,
-    scaling: f32,
+    rotation: f64,
+    scaling: f64,
 }
 
 impl<'a> PlottingContext<'a> {
@@ -813,7 +819,7 @@ impl<'a> PlottingContext<'a> {
         Ok(())
     }
 
-    fn calculate_transformation_matrix(&self) -> Matrix2<f32> {
+    fn calculate_transformation_matrix(&self) -> Matrix2<f64> {
         // Apply mirroring
         let matrix = match self.mirroring {
             MirroringMode::None => Matrix2::identity(),
@@ -829,15 +835,15 @@ impl<'a> PlottingContext<'a> {
 }
 
 fn shape_from_aperture_macro(
-    transform: Matrix2<f32>,
+    transform: Matrix2<f64>,
     format: &Format,
     shapes: &mut Vec<Shape>,
-    position: Vector2<f32>,
+    position: Vector2<f64>,
     aperture_macro: &[MacroContent],
-    arguments: &[f32],
+    arguments: &[f64],
 ) -> Result<()> {
     let position = transform * position;
-    let mut variables: HashMap<u32, f32> = arguments
+    let mut variables: HashMap<u32, f64> = arguments
         .iter()
         .enumerate()
         .map(|(index, value)| (index as u32 + 1, *value))
@@ -904,7 +910,7 @@ fn shape_from_aperture_macro(
                     Rotation2::new(angle.evaluate(&variables)?.to_radians()).matrix() * transform;
 
                 let mut coordinate_iter =
-                    coordinates.iter().map(|(x, y)| -> Result<Vector2<f32>> {
+                    coordinates.iter().map(|(x, y)| -> Result<Vector2<f64>> {
                         let x = format.internalize_coordinate_from_float(x.evaluate(&variables)?);
                         let y = format.internalize_coordinate_from_float(y.evaluate(&variables)?);
                         Ok(transform * Vector2::new(x, y) + position)

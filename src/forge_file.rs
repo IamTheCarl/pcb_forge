@@ -17,7 +17,7 @@ pub struct ForgeFile {
     pub board_version: Version,
 
     #[serde(deserialize_with = "parse_quantity")]
-    pub board_thickness: Length<uom::si::SI<f32>, f32>,
+    pub board_thickness: Length<uom::si::SI<f64>, f64>,
 
     #[serde(default)]
     /// Projects can specify machines as well, to speed up team onboarding.

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use uom::si::{
-    f32::Ratio,
+    f64::Ratio,
     length::{mil, millimeter, Length},
     power::Power,
     ratio::ratio,
@@ -15,15 +15,15 @@ use crate::{
 
 pub enum GCommand {
     AbsoluteMode,
-    SetRapidTransverseSpeed(Velocity<uom::si::SI<f32>, f32>),
-    SetWorkSpeed(Velocity<uom::si::SI<f32>, f32>),
-    SetPower(Power<uom::si::SI<f32>, f32>),
+    SetRapidTransverseSpeed(Velocity<uom::si::SI<f64>, f64>),
+    SetWorkSpeed(Velocity<uom::si::SI<f64>, f64>),
+    SetPower(Power<uom::si::SI<f64>, f64>),
     Cut {
         movement: MovementType,
-        target: (Length<uom::si::SI<f32>, f32>, Length<uom::si::SI<f32>, f32>),
+        target: (Length<uom::si::SI<f64>, f64>, Length<uom::si::SI<f64>, f64>),
     },
     MoveTo {
-        target: (Length<uom::si::SI<f32>, f32>, Length<uom::si::SI<f32>, f32>),
+        target: (Length<uom::si::SI<f64>, f64>, Length<uom::si::SI<f64>, f64>),
     },
     UnitMode(UnitMode),
     SetFanPower {
@@ -35,15 +35,15 @@ pub enum GCommand {
 pub enum MovementType {
     Linear,
     ClockwiseCurve {
-        diameter: Length<uom::si::SI<f32>, f32>,
+        diameter: Length<uom::si::SI<f64>, f64>,
     },
     CounterClockwiseCurve {
-        diameter: Length<uom::si::SI<f32>, f32>,
+        diameter: Length<uom::si::SI<f64>, f64>,
     },
 }
 
 pub struct GCodeFile {
-    max_power: Power<uom::si::SI<f32>, f32>,
+    max_power: Power<uom::si::SI<f64>, f64>,
     commands: Vec<GCommand>,
 }
 
@@ -143,7 +143,7 @@ impl Display for GCodeFile {
 }
 
 impl GCodeFile {
-    pub fn new(max_power: Power<uom::si::SI<f32>, f32>, commands: Vec<GCommand>) -> Self {
+    pub fn new(max_power: Power<uom::si::SI<f64>, f64>, commands: Vec<GCommand>) -> Self {
         Self {
             max_power,
             commands,
@@ -162,7 +162,7 @@ pub enum ToolSelection<'a> {
 }
 
 impl<'a> ToolSelection<'a> {
-    pub fn diameter(&self) -> Length<uom::si::SI<f32>, f32> {
+    pub fn diameter(&self) -> Length<uom::si::SI<f64>, f64> {
         match self {
             ToolSelection::Laser { laser } => laser.point_diameter,
             ToolSelection::Spindle { spindle: _, bit } => match bit {

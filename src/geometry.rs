@@ -14,7 +14,7 @@ use crate::parsing::gerber::Polarity;
 #[derive(Debug)]
 pub struct Shape {
     pub polarity: Polarity,
-    pub starting_point: Vector2<f32>,
+    pub starting_point: Vector2<f64>,
     pub segments: Vec<Segment>,
 }
 
@@ -32,7 +32,7 @@ impl Shape {
         Ok(())
     }
 
-    pub fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
+    pub fn calculate_bounds(&self) -> (f64, f64, f64, f64) {
         let mut min_x = self.starting_point.x;
         let mut min_y = self.starting_point.y;
         let mut max_x = self.starting_point.x;
@@ -49,7 +49,7 @@ impl Shape {
         (min_x, min_y, max_x, max_y)
     }
 
-    fn convert_to_line_string(&self, distance_per_step: f32) -> LineString<f32> {
+    fn convert_to_line_string(&self, distance_per_step: f64) -> LineString<f64> {
         let mut points = Vec::new();
 
         let mut start_point = self.starting_point;
@@ -61,13 +61,13 @@ impl Shape {
         LineString(points)
     }
 
-    pub fn convert_to_geo_polygon(&self, distance_per_step: f32) -> Polygon<f32> {
+    pub fn convert_to_geo_polygon(&self, distance_per_step: f64) -> Polygon<f64> {
         // Start by separating the internal holes from the outer shape.
         #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
         enum SegmentInfo {
             Line,
-            Clockwise { diameter: NotNan<f32> },
-            CounterClockwise { diameter: NotNan<f32> },
+            Clockwise { diameter: NotNan<f64> },
+            CounterClockwise { diameter: NotNan<f64> },
         }
         impl SegmentInfo {
             fn inverse(&self) -> SegmentInfo {
@@ -89,11 +89,11 @@ impl Shape {
 
         fn separator_function(
             polarity: Polarity,
-            starting_point: &mut Vector2<f32>,
-            repeatable_segments: &mut HashMap<(NotNan<f32>, NotNan<f32>, SegmentInfo), usize>,
+            starting_point: &mut Vector2<f64>,
+            repeatable_segments: &mut HashMap<(NotNan<f64>, NotNan<f64>, SegmentInfo), usize>,
             collected_segments: &mut Vec<Segment>,
             shapes: &mut Vec<Shape>,
-            end: Vector2<f32>,
+            end: Vector2<f64>,
             segment_info: SegmentInfo,
         ) {
             let x = NotNan::new(starting_point.x).expect("Got NAN");
@@ -235,11 +235,11 @@ impl Shape {
     }
 
     pub fn line(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         polarity: Polarity,
-        diameter: f32,
-        start: Vector2<f32>,
-        end: Vector2<f32>,
+        diameter: f64,
+        start: Vector2<f64>,
+        end: Vector2<f64>,
     ) -> Self {
         let start = transform * start;
         let end = transform * end;
@@ -281,11 +281,11 @@ impl Shape {
     }
 
     pub fn square_line(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         polarity: Polarity,
-        width: f32,
-        start: Vector2<f32>,
-        end: Vector2<f32>,
+        width: f64,
+        start: Vector2<f64>,
+        end: Vector2<f64>,
     ) -> Self {
         let start = transform * start;
         let end = transform * end;
@@ -325,10 +325,10 @@ impl Shape {
     }
 
     pub fn add_hole(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         shapes: &mut Vec<Shape>,
-        position: Vector2<f32>,
-        hole_diameter: Option<f32>,
+        position: Vector2<f64>,
+        hole_diameter: Option<f64>,
     ) {
         if let Some(hole_diameter) = hole_diameter {
             let position = transform * position;
@@ -353,12 +353,12 @@ impl Shape {
     }
 
     pub fn circle(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         shapes: &mut Vec<Shape>,
         polarity: Polarity,
-        position: Vector2<f32>,
-        diameter: f32,
-        hole_diameter: Option<f32>,
+        position: Vector2<f64>,
+        diameter: f64,
+        hole_diameter: Option<f64>,
     ) {
         let radius = diameter / 2.0;
         let starting_point = position + Vector2::new(radius, 0.0);
@@ -382,13 +382,13 @@ impl Shape {
     }
 
     pub fn rectangle(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         shapes: &mut Vec<Shape>,
         polarity: Polarity,
-        position: Vector2<f32>,
-        width: f32,
-        height: f32,
-        hole_diameter: Option<f32>,
+        position: Vector2<f64>,
+        width: f64,
+        height: f64,
+        hole_diameter: Option<f64>,
     ) {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
@@ -423,13 +423,13 @@ impl Shape {
     }
 
     pub fn obround(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         shapes: &mut Vec<Shape>,
         polarity: Polarity,
-        position: Vector2<f32>,
-        width: f32,
-        height: f32,
-        hole_diameter: Option<f32>,
+        position: Vector2<f64>,
+        width: f64,
+        height: f64,
+        hole_diameter: Option<f64>,
     ) {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
@@ -466,14 +466,14 @@ impl Shape {
     }
 
     pub fn polygon(
-        transform: Matrix2<f32>,
+        transform: Matrix2<f64>,
         shapes: &mut Vec<Shape>,
         polarity: Polarity,
-        position: Vector2<f32>,
-        diameter: f32,
+        position: Vector2<f64>,
+        diameter: f64,
         num_vertices: u32,
-        rotation: f32,
-        hole_diameter: Option<f32>,
+        rotation: f64,
+        hole_diameter: Option<f64>,
     ) -> Result<()> {
         bail!("Unimplemented 1");
 
@@ -483,9 +483,9 @@ impl Shape {
 
 #[derive(Debug, Clone)]
 pub enum Segment {
-    Line { end: Vector2<f32> },
-    ClockwiseCurve { end: Vector2<f32>, diameter: f32 },
-    CounterClockwiseCurve { end: Vector2<f32>, diameter: f32 },
+    Line { end: Vector2<f64> },
+    ClockwiseCurve { end: Vector2<f64>, diameter: f64 },
+    CounterClockwiseCurve { end: Vector2<f64>, diameter: f64 },
 }
 
 impl Segment {
@@ -515,7 +515,7 @@ impl Segment {
         }
     }
 
-    fn calculate_bounds(&self) -> (f32, f32, f32, f32) {
+    fn calculate_bounds(&self) -> (f64, f64, f64, f64) {
         match self {
             Segment::Line { end } => (end.x, end.y, end.x, end.y),
             Segment::ClockwiseCurve { end, diameter }
@@ -528,7 +528,7 @@ impl Segment {
         }
     }
 
-    fn end(&self) -> Vector2<f32> {
+    fn end(&self) -> Vector2<f64> {
         match self {
             Segment::Line { end } => *end,
             Segment::ClockwiseCurve { end, diameter: _ } => *end,
@@ -538,9 +538,9 @@ impl Segment {
 
     fn append_to_line_string(
         &self,
-        distance_per_step: f32,
-        start: Vector2<f32>,
-        points: &mut Vec<Coord<f32>>,
+        distance_per_step: f64,
+        start: Vector2<f64>,
+        points: &mut Vec<Coord<f64>>,
     ) {
         enum ArchDirection {
             Clockwise,
@@ -548,12 +548,12 @@ impl Segment {
         }
 
         fn arc_to_cords(
-            distance_per_step: f32,
-            start: Vector2<f32>,
-            end: Vector2<f32>,
-            diameter: f32,
+            distance_per_step: f64,
+            start: Vector2<f64>,
+            end: Vector2<f64>,
+            diameter: f64,
             direction: ArchDirection,
-            points: &mut Vec<Coord<f32>>,
+            points: &mut Vec<Coord<f64>>,
         ) {
             let radius = diameter / 2.0;
             let chord = end - start;
@@ -600,8 +600,8 @@ impl Segment {
             let steps = steps as usize;
 
             for step_index in 0..steps {
-                let angle = starting_angle + angle_step * step_index as f32;
-                let radius = starting_radius + radius_step * step_index as f32;
+                let angle = starting_angle + angle_step * step_index as f64;
+                let radius = starting_radius + radius_step * step_index as f64;
 
                 let (sin, cos) = angle.sin_cos();
                 let offset = Vector2::new(cos, sin) * radius;

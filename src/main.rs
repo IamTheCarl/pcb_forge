@@ -159,7 +159,12 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
 
                     let mut document = svg_composer::Document::new(
                         Vec::new(),
-                        Some([bounds.0, bounds.1, bounds.2, bounds.3]),
+                        Some([
+                            bounds.0 as f32,
+                            bounds.1 as f32,
+                            bounds.2 as f32,
+                            bounds.3 as f32,
+                        ]),
                     );
                     gerber
                         .debug_render(&mut document, false)
@@ -179,7 +184,12 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
 
                     let mut document = svg_composer::Document::new(
                         Vec::new(),
-                        Some([bounds.0, bounds.1, bounds.2, bounds.3]),
+                        Some([
+                            bounds.0 as f32,
+                            bounds.1 as f32,
+                            bounds.2 as f32,
+                            bounds.3 as f32,
+                        ]),
                     );
 
                     gerber

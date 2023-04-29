@@ -41,17 +41,17 @@ where
 
 #[derive(Debug)]
 pub struct VectorVolumeBounds {
-    pub start: Vector2<Length<uom::si::SI<f32>, f32>>,
-    pub end: Vector2<Length<uom::si::SI<f32>, f32>>,
+    pub start: Vector2<Length<uom::si::SI<f64>, f64>>,
+    pub end: Vector2<Length<uom::si::SI<f64>, f64>>,
 }
 
 pub trait VectorVolume {
     fn bounds(&self) -> VectorVolumeBounds;
-    fn is_point_in_volume(&self, point: Vector2<Length<uom::si::SI<f32>, f32>>) -> bool;
+    fn is_point_in_volume(&self, point: Vector2<Length<uom::si::SI<f64>, f64>>) -> bool;
     fn cast_line(
         &self,
-        start: Vector2<Length<uom::si::SI<f32>, f32>>,
-        end: Vector2<Length<uom::si::SI<f32>, f32>>,
+        start: Vector2<Length<uom::si::SI<f64>, f64>>,
+        end: Vector2<Length<uom::si::SI<f64>, f64>>,
     );
     // fn trace_boundaries(&self) -> impl Iterator<>,
 }

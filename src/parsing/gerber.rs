@@ -77,7 +77,7 @@ pub enum GerberCommand<'a> {
     StepAndRepeat {
         // SR 4.12
         iterations: Vector2<u32>,
-        delta: Vector2<f32>,
+        delta: Vector2<f64>,
         commands: Vec<GerberCommandContext<'a>>,
     },
 
@@ -101,8 +101,8 @@ pub enum GerberCommand<'a> {
 
     LoadPolarity(Polarity),       // LP 4.9.2
     LoadMirroring(MirroringMode), // LM 4.9.3
-    LoadRotation(f32),            // LR 4.9.4
-    LoadScaling(f32),             // LS 4.9.5
+    LoadRotation(f64),            // LR 4.9.4
+    LoadScaling(f64),             // LS 4.9.5
 
     ApertureBlock(u32, Vec<GerberCommandContext<'a>>), // AB 4.11
 }
@@ -196,28 +196,28 @@ pub enum UnitMode {
 #[derive(Debug, Clone)]
 pub enum ApertureTemplate<'a> {
     Circle {
-        diameter: f32,
-        hole_diameter: Option<f32>,
+        diameter: f64,
+        hole_diameter: Option<f64>,
     },
     Rectangle {
-        width: f32,
-        height: f32,
-        hole_diameter: Option<f32>,
+        width: f64,
+        height: f64,
+        hole_diameter: Option<f64>,
     },
     Obround {
-        width: f32,
-        height: f32,
-        hole_diameter: Option<f32>,
+        width: f64,
+        height: f64,
+        hole_diameter: Option<f64>,
     },
     Polygon {
-        diameter: f32,
+        diameter: f64,
         num_vertices: u32,
-        rotation: Option<f32>,
-        hole_diameter: Option<f32>,
+        rotation: Option<f64>,
+        hole_diameter: Option<f64>,
     },
     Macro {
         name: Span<'a>,
-        arguments: Vec<f32>,
+        arguments: Vec<f64>,
     },
 }
 
@@ -288,8 +288,8 @@ pub enum MacroExpression {
 impl MacroExpression {
     pub fn evaluate(
         &self,
-        arguments: &HashMap<u32, f32>,
-    ) -> Result<f32, MacroExpressionEvaluationError> {
+        arguments: &HashMap<u32, f64>,
+    ) -> Result<f64, MacroExpressionEvaluationError> {
         match self {
             MacroExpression::UnaryPlus(term) => term.evaluate(arguments),
             MacroExpression::UnaryMinus(term) => Ok(-term.evaluate(arguments)?),
@@ -312,8 +312,8 @@ pub enum MacroTerm {
 impl MacroTerm {
     pub fn evaluate(
         &self,
-        arguments: &HashMap<u32, f32>,
-    ) -> Result<f32, MacroExpressionEvaluationError> {
+        arguments: &HashMap<u32, f64>,
+    ) -> Result<f64, MacroExpressionEvaluationError> {
         match self {
             MacroTerm::Multiply(a, b) => Ok(a.evaluate(arguments)? * b.evaluate(arguments)?),
             MacroTerm::Divide(a, b) => Ok(a.evaluate(arguments)? / b.evaluate(arguments)?),
@@ -324,7 +324,7 @@ impl MacroTerm {
 
 #[derive(Debug, Clone)]
 pub enum MacroFactor {
-    Const(f32), // Should never be negative.
+    Const(f64), // Should never be negative.
     Variable(u32),
     Parenthesis(Box<MacroExpression>),
 }
@@ -332,8 +332,8 @@ pub enum MacroFactor {
 impl MacroFactor {
     pub fn evaluate(
         &self,
-        arguments: &HashMap<u32, f32>,
-    ) -> Result<f32, MacroExpressionEvaluationError> {
+        arguments: &HashMap<u32, f64>,
+    ) -> Result<f64, MacroExpressionEvaluationError> {
         match self {
             MacroFactor::Const(value) => Ok(*value),
             MacroFactor::Variable(index) => arguments
@@ -1106,15 +1106,15 @@ fn parse_integer(input: Span) -> IResult<Span, Span> {
     take_while1(|c: char| c.is_ascii_digit() | matches!(c, '+' | '-'))(input)
 }
 
-fn parse_unsigned_decimal(input: Span) -> IResult<Span, f32> {
+fn parse_unsigned_decimal(input: Span) -> IResult<Span, f64> {
     // unsigned_decimal =      /((([0-9]+)(\.[0-9]*)?)|(\.[0-9]+))/;
     map_res(
         take_while(|c| matches!(c, '.' | '0'..='9')), // Intentionally no + or - sign in there.
-        move |number: Span| number.fragment().parse::<f32>(),
+        move |number: Span| number.fragment().parse::<f64>(),
     )(input)
 }
 
-fn parse_decimal(input: Span) -> IResult<Span, f32> {
+fn parse_decimal(input: Span) -> IResult<Span, f64> {
     // decimal          = /[+-]?((([0-9]+)(\.[0-9]*)?)|(\.[0-9]+))/;
 
     // Get the sign of the number..
@@ -1126,7 +1126,7 @@ fn parse_decimal(input: Span) -> IResult<Span, f32> {
     // Now we can parse the digits.
     map_res(
         take_while(|c| matches!(c, '.' | '0'..='9')),
-        move |number: Span| number.fragment().parse::<f32>().map(|value| value * sign),
+        move |number: Span| number.fragment().parse::<f64>().map(|value| value * sign),
     )(input)
 }
 

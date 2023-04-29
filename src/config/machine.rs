@@ -29,12 +29,12 @@ pub struct Machine {
 #[derive(Debug, Deserialize, Clone, Copy)]
 pub struct WorkspaceSize {
     #[serde(deserialize_with = "parse_quantity")]
-    pub width: Length<uom::si::SI<f32>, f32>,
+    pub width: Length<uom::si::SI<f64>, f64>,
     #[serde(deserialize_with = "parse_quantity")]
-    pub height: Length<uom::si::SI<f32>, f32>,
+    pub height: Length<uom::si::SI<f64>, f64>,
 }
 
-impl From<WorkspaceSize> for Vector2<Length<uom::si::SI<f32>, f32>> {
+impl From<WorkspaceSize> for Vector2<Length<uom::si::SI<f64>, f64>> {
     fn from(value: WorkspaceSize) -> Self {
         Self::new(value.width, value.height)
     }
@@ -47,14 +47,14 @@ pub struct JobConfig {
     pub tool: Utf8PathBuf,
 
     #[serde(default = "distance_per_step_default")]
-    pub distance_per_step: Length<uom::si::SI<f32>, f32>,
+    pub distance_per_step: Length<uom::si::SI<f64>, f64>,
 
     /// The power of the tool. The unit depends on the tool.
     #[serde(flatten)]
     pub tool_power: ToolConfig,
 }
 
-fn distance_per_step_default() -> Length<uom::si::SI<f32>, f32> {
+fn distance_per_step_default() -> Length<uom::si::SI<f64>, f64> {
     Length::new::<millimeter>(0.1)
 }
 
@@ -63,31 +63,31 @@ fn distance_per_step_default() -> Length<uom::si::SI<f32>, f32> {
 pub enum ToolConfig {
     Laser {
         #[serde(deserialize_with = "parse_quantity")]
-        laser_power: Power<uom::si::SI<f32>, f32>,
+        laser_power: Power<uom::si::SI<f64>, f64>,
 
         #[serde(deserialize_with = "parse_quantity")]
-        work_speed: Velocity<uom::si::SI<f32>, f32>,
+        work_speed: Velocity<uom::si::SI<f64>, f64>,
     },
     Drill {
         #[serde(deserialize_with = "parse_quantity")]
-        spindle_rpm: AngularVelocity<uom::si::SI<f32>, f32>,
+        spindle_rpm: AngularVelocity<uom::si::SI<f64>, f64>,
 
         #[serde(deserialize_with = "parse_quantity")]
-        plunge_speed: Velocity<uom::si::SI<f32>, f32>,
+        plunge_speed: Velocity<uom::si::SI<f64>, f64>,
     },
     EndMill {
         #[serde(deserialize_with = "parse_quantity")]
-        spindle_rpm: AngularVelocity<uom::si::SI<f32>, f32>,
+        spindle_rpm: AngularVelocity<uom::si::SI<f64>, f64>,
 
         /// The max depth that the end mill should plunge into the board.
         #[serde(deserialize_with = "parse_quantity")]
-        max_cut_depth: Length<uom::si::SI<f32>, f32>,
+        max_cut_depth: Length<uom::si::SI<f64>, f64>,
 
         #[serde(deserialize_with = "parse_quantity")]
-        plunge_speed: Velocity<uom::si::SI<f32>, f32>,
+        plunge_speed: Velocity<uom::si::SI<f64>, f64>,
 
         #[serde(deserialize_with = "parse_quantity")]
-        work_speed: Velocity<uom::si::SI<f32>, f32>,
+        work_speed: Velocity<uom::si::SI<f64>, f64>,
     },
 }
 
@@ -141,16 +141,16 @@ pub enum Tool {
 #[derive(Debug, Deserialize)]
 pub struct LaserConfig {
     #[serde(deserialize_with = "parse_quantity")]
-    pub point_diameter: Length<uom::si::SI<f32>, f32>,
+    pub point_diameter: Length<uom::si::SI<f64>, f64>,
 
     #[serde(deserialize_with = "parse_quantity")]
-    pub max_power: Power<uom::si::SI<f32>, f32>,
+    pub max_power: Power<uom::si::SI<f64>, f64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SpindleConfig {
     #[serde(deserialize_with = "parse_quantity")]
-    pub max_speed: AngularVelocity<uom::si::SI<f32>, f32>,
+    pub max_speed: AngularVelocity<uom::si::SI<f64>, f64>,
 
     pub bits: HashMap<String, SpindleBit>,
 }
@@ -160,12 +160,12 @@ pub enum SpindleBit {
     #[serde(rename = "drill")]
     Drill {
         #[serde(deserialize_with = "parse_quantity")]
-        diameter: Length<uom::si::SI<f32>, f32>,
+        diameter: Length<uom::si::SI<f64>, f64>,
     },
 
     #[serde(rename = "end_mill")]
     EndMill {
         #[serde(deserialize_with = "parse_quantity")]
-        diameter: Length<uom::si::SI<f32>, f32>,
+        diameter: Length<uom::si::SI<f64>, f64>,
     },
 }

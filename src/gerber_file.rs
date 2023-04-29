@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use geo::{BooleanOps, BoundingRect, Contains, Coord, MultiPolygon};
+use geo::{BooleanOps, BoundingRect, ClosestPoint, Contains, Coord, Line, MultiPolygon};
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use progress_bar::*;
 use std::{collections::HashMap, fs, ops::Deref, path::Path};
@@ -134,16 +134,21 @@ impl GerberFile {
                     );
 
                     {
+                        struct InfillLine {
+                            start: Vector2<f32>,
+                            end: Vector2<f32>,
+                        }
+
                         init_progress_bar(
                             ((max_y - min_y) / (tool_config.diameter() / 2.0).get::<millimeter>())
                                 .ceil() as usize,
                         );
                         set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
 
+                        let mut lines = Vec::new();
+
                         let mut y = min_y;
                         while y < max_y {
-                            // println!("{}", (y - min_y) / (max_y - min_y));
-                            inc_progress_bar();
                             let mut x = min_x;
                             let mut start = None;
                             let mut end = None;
@@ -159,18 +164,9 @@ impl GerberFile {
                                     end = Some(x);
                                 } else if let (Some(start), Some(end)) = (start.take(), end.take())
                                 {
-                                    commands.push(GCommand::MoveTo {
-                                        target: (
-                                            Length::new::<millimeter>(start),
-                                            Length::new::<millimeter>(y),
-                                        ),
-                                    });
-                                    commands.push(GCommand::Cut {
-                                        movement: MovementType::Linear,
-                                        target: (
-                                            Length::new::<millimeter>(end),
-                                            Length::new::<millimeter>(y),
-                                        ),
+                                    lines.push(InfillLine {
+                                        start: Vector2::new(start, y),
+                                        end: Vector2::new(end, y),
                                     });
                                 }
 
@@ -178,6 +174,83 @@ impl GerberFile {
                             }
 
                             y += (tool_config.diameter() / 2.0).get::<millimeter>();
+                            // println!("{}", (y - min_y) / (max_y - min_y));
+                            inc_progress_bar();
+                        }
+
+                        finalize_progress_bar();
+                        init_progress_bar(lines.len());
+                        set_progress_bar_action("Sorting", progress_bar::Color::Cyan, Style::Bold);
+
+                        enum LineSelection {
+                            None,
+                            Start(usize),
+                            End(usize),
+                        }
+
+                        let mut last_position = Vector2::new(min_x, min_y);
+
+                        while !lines.is_empty() {
+                            let mut last_distance = f32::INFINITY;
+                            let mut line_selection = LineSelection::None;
+
+                            for (line_index, line) in lines.iter().enumerate() {
+                                let distance_to_start = (line.start - last_position).norm();
+                                if distance_to_start < last_distance {
+                                    last_distance = distance_to_start;
+                                    line_selection = LineSelection::Start(line_index)
+                                }
+
+                                let distance_to_end = (line.end - last_position).norm();
+                                if distance_to_end < last_distance {
+                                    last_distance = distance_to_end;
+                                    line_selection = LineSelection::End(line_index)
+                                }
+                            }
+
+                            match line_selection {
+                                LineSelection::None => unreachable!(),
+                                LineSelection::Start(index) => {
+                                    let line = lines.remove(index);
+
+                                    commands.push(GCommand::MoveTo {
+                                        target: (
+                                            Length::new::<millimeter>(line.start.x),
+                                            Length::new::<millimeter>(line.start.y),
+                                        ),
+                                    });
+                                    commands.push(GCommand::Cut {
+                                        movement: MovementType::Linear,
+                                        target: (
+                                            Length::new::<millimeter>(line.end.x),
+                                            Length::new::<millimeter>(line.end.y),
+                                        ),
+                                    });
+
+                                    last_position = line.end;
+                                }
+                                LineSelection::End(index) => {
+                                    let line = lines.remove(index);
+
+                                    commands.push(GCommand::MoveTo {
+                                        target: (
+                                            Length::new::<millimeter>(line.end.x),
+                                            Length::new::<millimeter>(line.end.y),
+                                        ),
+                                    });
+                                    commands.push(GCommand::Cut {
+                                        movement: MovementType::Linear,
+                                        target: (
+                                            Length::new::<millimeter>(line.start.x),
+                                            Length::new::<millimeter>(line.start.y),
+                                        ),
+                                    });
+
+                                    last_position = line.start;
+                                }
+                            }
+
+                            inc_progress_bar();
                         }
 
                         finalize_progress_bar();

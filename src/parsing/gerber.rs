@@ -1,11 +1,12 @@
+//! The Gerber specification can be found [here](https://www.ucamco.com/en/guest/downloads/gerber-format). The copy
+//! that was used to create this parser is located [here](../../specifications/gerber-layer-format-specification-revision-2023-03_en.pdf)
+//!
+//! Several structures and functions in this file will state section numbers referencing that document.
+//!
+
 use std::collections::HashMap;
 
 use nalgebra::Vector2;
-/// The Gerber specification can be found [here](https://www.ucamco.com/en/guest/downloads/gerber-format). The copy
-/// that was used to create this parser is located [here](../../specifications/gerber-layer-format-specification-revision-2023-03_en.pdf)
-///
-/// Several structures and functions in this file will state page numbers referencing that document.
-///
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
@@ -18,6 +19,8 @@ use nom::{
 };
 use nom_locate::LocatedSpan;
 use thiserror::Error;
+
+use super::{LocationInfo, UnitMode};
 
 pub type Span<'a> = LocatedSpan<&'a str>;
 
@@ -45,12 +48,6 @@ impl<'a> std::fmt::Debug for GerberCommandContext<'a> {
             .field("span", &location_info)
             .finish()
     }
-}
-
-#[derive(Debug)]
-pub struct LocationInfo {
-    pub line: u32,
-    pub column: usize,
 }
 
 impl std::fmt::Display for LocationInfo {
@@ -184,12 +181,6 @@ pub enum Attribute<'a> {
         // TD 5.5
         name: Option<Span<'a>>, // Setting to none means to delete all non-file attributes.
     },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UnitMode {
-    Metric,
-    Imperial,
 }
 
 // Section 4.4

@@ -22,9 +22,12 @@ use crate::{
     config::machine::JobConfig,
     gcode_generation::{GCommand, MovementType, ToolSelection},
     geometry::{Segment, Shape},
-    parsing::gerber::{
-        parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
-        Operation, Polarity, Span, UnitMode,
+    parsing::{
+        gerber::{
+            parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent,
+            MirroringMode, Operation, Polarity, Span,
+        },
+        UnitMode,
     },
 };
 

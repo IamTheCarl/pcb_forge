@@ -3,7 +3,20 @@ use serde::{Deserialize, Deserializer};
 use std::str::FromStr;
 use uom::si::{length::Length, Quantity};
 
+pub mod drill;
 pub mod gerber;
+
+#[derive(Debug, Clone, Copy)]
+pub enum UnitMode {
+    Metric,
+    Imperial,
+}
+
+#[derive(Debug)]
+pub struct LocationInfo {
+    pub line: u32,
+    pub column: usize,
+}
 
 pub fn parse_quantity<'de, U, V, D, DE>(deserializer: DE) -> Result<Quantity<D, U, V>, DE::Error>
 where

@@ -188,7 +188,36 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                         )?;
                     }
                     forge_file::CutBoardFile::Drill(drill_file) => {
-                        log::error!("Drill files are not yet supported.");
+                        let file_path = build_configuration
+                            .forge_file_path
+                            .parent()
+                            .context("Could not get working directory of forge file.")?
+                            .join(drill_file);
+
+                        let drill_file_content = fs::read_to_string(&file_path)
+                            .context("Failed to read drill file from disk.")?;
+                        match parsing::drill::parse_drill_file(parsing::drill::Span::new(
+                            &drill_file_content,
+                        )) {
+                            Ok(drill_file) => {
+                                dbg!(drill_file);
+                            }
+                            Err(error) => match error {
+                                nom::Err::Error(error) | nom::Err::Failure(error) => {
+                                    let _ = error;
+                                    bail!(
+                                        "Failed to parse gerber file {}:{}:{} - {:?}",
+                                        file_path.to_string_lossy(),
+                                        error.input.location_line(),
+                                        error.input.get_utf8_column(),
+                                        error.code,
+                                    )
+                                }
+                                nom::Err::Incomplete(_) => {
+                                    bail!("Failed to parse gerber file: Unexpected EOF")
+                                }
+                            },
+                        }
                     }
                 }
             }

@@ -1,3 +1,6 @@
+//! Tools to generate GCode.
+//! Fantastic documentation of GCode commands can be found [here](https://marlinfw.org/meta/gcode/).
+
 use std::fmt::Write;
 
 use anyhow::{Context, Result};
@@ -11,7 +14,7 @@ use uom::si::{
 
 use crate::{
     config::machine::{LaserConfig, SpindleBit, SpindleConfig},
-    parsing::gerber::UnitMode,
+    parsing::UnitMode,
 };
 
 #[derive(Debug, Clone)]

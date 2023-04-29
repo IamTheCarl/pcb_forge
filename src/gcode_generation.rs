@@ -111,7 +111,7 @@ impl Display for GCodeFile {
                     }
                 }
                 GCommand::MoveTo { target: (x, y) } => {
-                    writeln!(f, "M4")?;
+                    writeln!(f, "M5")?;
 
                     let (x, y) = match unit_mode {
                         UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),

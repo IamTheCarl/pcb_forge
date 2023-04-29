@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use geo::{BooleanOps, BoundingRect, Contains, Coord, MultiPolygon};
 use nalgebra::{Matrix2, Rotation2, Vector2};
+use progress_bar::*;
 use std::{collections::HashMap, fs, ops::Deref, path::Path};
 use svg_composer::{
     document::Document as SvgDocument,
@@ -17,7 +18,7 @@ use uom::si::{
 };
 
 use crate::{
-    config::machine::JobConfig,
+    config::machine::{JobConfig, ToolConfig},
     gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
     geometry::{Segment, Shape},
     parsing::gerber::{
@@ -67,107 +68,125 @@ impl GerberFile {
                 laser_power,
                 work_speed,
             } => {
-                let mut commands = vec![
-                    GCommand::AbsoluteMode,
-                    GCommand::UnitMode(UnitMode::Metric),
-                    GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
-                        3000.0, // TODO this should come from the config file.
-                    )),
-                    GCommand::SetWorkSpeed(work_speed),
-                    GCommand::SetPower(laser_power),
-                    GCommand::SetFanPower {
-                        index: 0,
-                        power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                    },
-                ];
+                if let ToolSelection::Laser { laser } = tool_config {
+                    let mut commands = vec![
+                        GCommand::AbsoluteMode,
+                        GCommand::UnitMode(UnitMode::Metric),
+                        GCommand::SetRapidTransverseSpeed(Velocity::new::<millimeter_per_second>(
+                            3000.0, // TODO this should come from the config file.
+                        )),
+                        GCommand::SetWorkSpeed(work_speed),
+                        GCommand::SetPower(laser_power),
+                        GCommand::SetFanPower {
+                            index: 0,
+                            power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                        },
+                    ];
 
-                // Start by generating GCode for the outlines.
+                    // Start by generating GCode for the outlines.
 
-                fn add_point_string<'a>(
-                    commands: &mut Vec<GCommand>,
-                    mut point_iter: impl Iterator<Item = &'a Coord<f32>>,
-                ) {
-                    if let Some(first_point) = point_iter.next() {
-                        commands.push(GCommand::MoveTo {
-                            target: (
-                                Length::new::<millimeter>(first_point.x),
-                                Length::new::<millimeter>(first_point.y),
-                            ),
-                        })
-                    }
+                    fn add_point_string<'a>(
+                        commands: &mut Vec<GCommand>,
+                        mut point_iter: impl Iterator<Item = &'a Coord<f32>>,
+                    ) {
+                        if let Some(first_point) = point_iter.next() {
+                            commands.push(GCommand::MoveTo {
+                                target: (
+                                    Length::new::<millimeter>(first_point.x),
+                                    Length::new::<millimeter>(first_point.y),
+                                ),
+                            })
+                        }
 
-                    for point in point_iter {
-                        commands.push(GCommand::Cut {
-                            movement: MovementType::Linear,
-                            target: (
-                                Length::new::<millimeter>(point.x),
-                                Length::new::<millimeter>(point.y),
-                            ),
-                        })
-                    }
-                }
-
-                {
-                    let polygon = &polygon.0;
-                    for polygon in polygon.iter() {
-                        add_point_string(&mut commands, polygon.exterior().0.iter());
-
-                        for interior in polygon.interiors() {
-                            add_point_string(&mut commands, interior.0.iter());
+                        for point in point_iter {
+                            commands.push(GCommand::Cut {
+                                movement: MovementType::Linear,
+                                target: (
+                                    Length::new::<millimeter>(point.x),
+                                    Length::new::<millimeter>(point.y),
+                                ),
+                            })
                         }
                     }
-                }
 
-                // Now we generate the infill.
-                log::info!("Generating infill.");
-                let bounds = polygon
-                    .bounding_rect()
-                    .context("Could not compute bounds for PCB.")?;
+                    {
+                        let polygon = &polygon.0;
+                        for polygon in polygon.iter() {
+                            add_point_string(&mut commands, polygon.exterior().0.iter());
 
-                {
-                    let mut y = bounds.min().y;
-                    while y < bounds.max().y {
-                        println!(
-                            "{}",
-                            (y - bounds.min().y) / (bounds.max().y - bounds.min().y)
+                            for interior in polygon.interiors() {
+                                add_point_string(&mut commands, interior.0.iter());
+                            }
+                        }
+                    }
+
+                    // Now we generate the infill.
+                    log::info!("Generating infill.");
+                    let bounds = polygon
+                        .bounding_rect()
+                        .context("Could not compute bounds for PCB.")?;
+
+                    let (min_x, min_y, max_x, max_y) = (
+                        bounds.min().x + (tool_config.diameter() / 2.0).get::<millimeter>(),
+                        bounds.min().y + (tool_config.diameter() / 2.0).get::<millimeter>(),
+                        bounds.max().x,
+                        bounds.max().y,
+                    );
+
+                    {
+                        init_progress_bar(
+                            ((max_y - min_y) / (tool_config.diameter() / 2.0).get::<millimeter>())
+                                .ceil() as usize,
                         );
-                        let mut x = bounds.min().x;
-                        let mut start = None;
-                        let mut end = None;
+                        set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
 
-                        while x < bounds.max().y {
-                            let point = Coord { x, y };
+                        let mut y = min_y;
+                        while y < max_y {
+                            // println!("{}", (y - min_y) / (max_y - min_y));
+                            inc_progress_bar();
+                            let mut x = min_x;
+                            let mut start = None;
+                            let mut end = None;
 
-                            if !polygon.contains(&point) {
-                                if start.is_none() {
-                                    start = Some(x);
+                            while x < max_x {
+                                let point = Coord { x, y };
+
+                                if !polygon.contains(&point) {
+                                    if start.is_none() {
+                                        start = Some(x);
+                                    }
+
+                                    end = Some(x);
+                                } else if let (Some(start), Some(end)) = (start.take(), end.take())
+                                {
+                                    commands.push(GCommand::MoveTo {
+                                        target: (
+                                            Length::new::<millimeter>(start),
+                                            Length::new::<millimeter>(y),
+                                        ),
+                                    });
+                                    commands.push(GCommand::Cut {
+                                        movement: MovementType::Linear,
+                                        target: (
+                                            Length::new::<millimeter>(end),
+                                            Length::new::<millimeter>(y),
+                                        ),
+                                    });
                                 }
 
-                                end = Some(x);
-                            } else if let (Some(start), Some(end)) = (start.take(), end.take()) {
-                                commands.push(GCommand::MoveTo {
-                                    target: (
-                                        Length::new::<millimeter>(start),
-                                        Length::new::<millimeter>(y),
-                                    ),
-                                });
-                                commands.push(GCommand::Cut {
-                                    movement: MovementType::Linear,
-                                    target: (
-                                        Length::new::<millimeter>(end),
-                                        Length::new::<millimeter>(y),
-                                    ),
-                                });
+                                x += (tool_config.diameter() / 2.0).get::<millimeter>();
                             }
 
-                            x += (tool_config.diameter() / 2.0).get::<millimeter>();
+                            y += (tool_config.diameter() / 2.0).get::<millimeter>();
                         }
 
-                        y += (tool_config.diameter() / 2.0).get::<millimeter>();
+                        finalize_progress_bar();
                     }
-                }
 
-                Ok(GCodeFile::new(laser_power, commands))
+                    Ok(GCodeFile::new(laser.max_power, commands))
+                } else {
+                    bail!("Job was configured for a laser but selected tool is not a laser.");
+                }
             }
             crate::config::machine::ToolConfig::Drill {
                 spindle_rpm: _,

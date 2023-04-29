@@ -1,10 +1,10 @@
 use camino::Utf8PathBuf;
 use std::collections::HashMap;
 use uom::si::{
-    angular_velocity::AngularVelocity,
+    angular_velocity::{revolution_per_minute, AngularVelocity},
     length::{millimeter, Length},
-    power::Power,
-    velocity::Velocity,
+    power::{watt, Power},
+    velocity::{millimeter_per_minute, Velocity},
 };
 
 use nalgebra::Vector2;
@@ -89,6 +89,44 @@ pub enum ToolConfig {
         #[serde(deserialize_with = "parse_quantity")]
         work_speed: Velocity<uom::si::SI<f32>, f32>,
     },
+}
+
+impl std::fmt::Display for ToolConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolConfig::Laser {
+                laser_power,
+                work_speed,
+            } => write!(
+                f,
+                "Power: {} W, Work Speed: {} mm/m",
+                laser_power.get::<watt>(),
+                work_speed.get::<millimeter_per_minute>()
+            ),
+            ToolConfig::Drill {
+                spindle_rpm,
+                plunge_speed,
+            } => write!(
+                f,
+                "RPM: {}, Plunge Speed: {} mm/m",
+                spindle_rpm.get::<revolution_per_minute>(),
+                plunge_speed.get::<millimeter_per_minute>()
+            ),
+            ToolConfig::EndMill {
+                spindle_rpm,
+                max_cut_depth,
+                plunge_speed,
+                work_speed,
+            } => write!(
+                f,
+                "RPM: {}, Max Cut Depth: {} mm, Plunge Speed: {} mm/m, Work Speed: {} mm/m",
+                spindle_rpm.get::<revolution_per_minute>(),
+                max_cut_depth.get::<millimeter>(),
+                plunge_speed.get::<millimeter_per_minute>(),
+                work_speed.get::<millimeter_per_minute>()
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -108,6 +108,8 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .get(&machine_profile)
                     .context("Failed to find machine profile.")?;
 
+                log::info!("Tool Info: {}", job_config.tool_power);
+
                 let mut tool_path = job_config.tool.ancestors();
                 let tool_name = tool_path
                     .next()

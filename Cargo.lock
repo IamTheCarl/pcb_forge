@@ -424,6 +424,7 @@ dependencies = [
  "nom",
  "nom_locate",
  "ordered-float",
+ "progress_bar",
  "semver",
  "serde",
  "serde_yaml",
@@ -440,6 +441,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b63bdb0cd06f1f4dedf69b254734f9b45af66e4a031e42a7480257d9898b435"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "progress_bar"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c8e8843722ce55deb442e7d6476a97c081b8485ea2807b031d160f592f99037"
+dependencies = [
+ "lazy_static",
 ]
 
 [[package]]

@@ -20,7 +20,7 @@ use uom::si::{
 
 use crate::{
     config::machine::JobConfig,
-    gcode_generation::{GCodeFile, GCommand, MovementType, ToolSelection},
+    gcode_generation::{GCommand, MovementType, ToolSelection},
     geometry::{Segment, Shape},
     parsing::gerber::{
         parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent, MirroringMode,
@@ -137,20 +137,20 @@ impl GerberFile {
                         }
                     }
 
-                    // Now we generate the infill.
-                    log::info!("Generating infill.");
-                    let bounds = polygon
-                        .bounding_rect()
-                        .context("Could not compute bounds for PCB.")?;
+                    if generate_infill {
+                        // Now we generate the infill.
+                        log::info!("Generating infill.");
+                        let bounds = polygon
+                            .bounding_rect()
+                            .context("Could not compute bounds for PCB.")?;
 
-                    let (min_x, min_y, max_x, max_y) = (
-                        bounds.min().x + (tool_config.diameter() / 2.0).get::<millimeter>(),
-                        bounds.min().y + (tool_config.diameter() / 2.0).get::<millimeter>(),
-                        bounds.max().x,
-                        bounds.max().y,
-                    );
+                        let (min_x, min_y, max_x, max_y) = (
+                            bounds.min().x + (tool_config.diameter() / 2.0).get::<millimeter>(),
+                            bounds.min().y + (tool_config.diameter() / 2.0).get::<millimeter>(),
+                            bounds.max().x,
+                            bounds.max().y,
+                        );
 
-                    {
                         struct InfillLine {
                             start: Vector2<f64>,
                             end: Vector2<f64>,

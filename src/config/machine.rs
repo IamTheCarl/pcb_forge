@@ -4,7 +4,7 @@ use uom::si::{
     angular_velocity::{revolution_per_minute, AngularVelocity},
     length::{millimeter, Length},
     power::{watt, Power},
-    velocity::{millimeter_per_minute, Velocity},
+    velocity::{millimeter_per_second, Velocity},
 };
 
 use nalgebra::Vector2;
@@ -101,7 +101,7 @@ impl std::fmt::Display for ToolConfig {
                 f,
                 "Power: {} W, Work Speed: {} mm/m",
                 laser_power.get::<watt>(),
-                work_speed.get::<millimeter_per_minute>()
+                work_speed.get::<millimeter_per_second>()
             ),
             ToolConfig::Drill {
                 spindle_rpm,
@@ -110,7 +110,7 @@ impl std::fmt::Display for ToolConfig {
                 f,
                 "RPM: {}, Plunge Speed: {} mm/m",
                 spindle_rpm.get::<revolution_per_minute>(),
-                plunge_speed.get::<millimeter_per_minute>()
+                plunge_speed.get::<millimeter_per_second>()
             ),
             ToolConfig::EndMill {
                 spindle_rpm,
@@ -122,8 +122,8 @@ impl std::fmt::Display for ToolConfig {
                 "RPM: {}, Max Cut Depth: {} mm, Plunge Speed: {} mm/m, Work Speed: {} mm/m",
                 spindle_rpm.get::<revolution_per_minute>(),
                 max_cut_depth.get::<millimeter>(),
-                plunge_speed.get::<millimeter_per_minute>(),
-                work_speed.get::<millimeter_per_minute>()
+                plunge_speed.get::<millimeter_per_second>(),
+                work_speed.get::<millimeter_per_second>()
             ),
         }
     }

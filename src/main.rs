@@ -1,11 +1,19 @@
-use std::{collections::HashMap, fs};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context, Result};
 
 mod arguments;
 mod config;
-use config::Config;
-use uom::si::length::{millimeter, Length};
+use camino::Utf8PathBuf;
+use config::{
+    machine::{JobConfig, Machine},
+    Config,
+};
+use gcode_generation::GCommand;
 mod gcode_generation;
 mod geometry;
 mod gerber_file;
@@ -81,9 +89,10 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 gerber_file,
                 gcode_file,
             } => {
+                log::info!("Process engrave stage: {:?}", gerber_file);
+
                 let gcode = gcode_files.entry(gcode_file.clone()).or_default();
 
-                log::info!("Process engrave stage: {:?}", gerber_file);
                 let machine_config_path = machine_config
                     .as_ref()
                     .or(global_config.default_engraver.as_ref())
@@ -115,110 +124,74 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .get(&machine_profile)
                     .context("Failed to find machine profile.")?;
 
-                log::info!("Tool Info: {}", job_config.tool_power);
-
-                let mut tool_path = job_config.tool.ancestors();
-                let tool_name = tool_path
-                    .next()
-                    .context("no tool name provided")?
-                    .to_string();
-
-                log::info!("Using tool: {}", tool_name);
-
-                let tool = machine_config
-                    .tools
-                    .get(&tool_name)
-                    .context("Could not find specified tool.")?;
-
-                let bit_name = tool_path.next().map(|name| name.to_string());
-
-                let tool_selection = match tool {
-                    Tool::Laser(laser) => ToolSelection::Laser { laser },
-                    Tool::Spindle(spindle) => {
-                        let bit_name = bit_name.context("No bit name provided for spindle.")?;
-                        log::info!("Using bit: {}", bit_name);
-                        ToolSelection::Spindle {
-                            spindle,
-                            bit: spindle
-                                .bits
-                                .get(&bit_name)
-                                .context("Spindle does not have a bit with requested name.")?,
-                        }
-                    }
-                };
-
-                let file_path = build_configuration
-                    .forge_file_path
-                    .parent()
-                    .context("Could not get working directory of forge file.")?
-                    .join(gerber_file);
-
-                let mut gerber = GerberFile::default();
-
-                // We load the file, or at least attempt to. We'll handle an error condition later.
-                let load_result = gerber_file::load(&mut gerber, &file_path)
-                    .context("Failed to load gerber file.");
-
-                // Debug render if applicable.
-                if let Some(debug_output_directory) = debug_output_directory.as_ref() {
-                    let output_file = debug_output_directory.join("gerber.svg");
-                    let bounds = gerber.calculate_svg_bounds();
-
-                    let mut document = svg_composer::Document::new(
-                        Vec::new(),
-                        Some([
-                            bounds.0 as f32,
-                            bounds.1 as f32,
-                            bounds.2 as f32,
-                            bounds.3 as f32,
-                        ]),
-                    );
-                    gerber
-                        .debug_render(&mut document, false)
-                        .context("Failed to render gerber debug SVG file.")?;
-
-                    fs::write(output_file, document.render())
-                        .context("Failed to save gerber debug SVG file.")?;
-                }
-
-                // Okay cool, now you can handle the error.
-                load_result?;
-
-                // Debug render if applicable.
-                if let Some(debug_output_directory) = debug_output_directory.as_ref() {
-                    let output_file = debug_output_directory.join("gerber_simplified.svg");
-                    let bounds = gerber.calculate_svg_bounds();
-
-                    let mut document = svg_composer::Document::new(
-                        Vec::new(),
-                        Some([
-                            bounds.0 as f32,
-                            bounds.1 as f32,
-                            bounds.2 as f32,
-                            bounds.3 as f32,
-                        ]),
-                    );
-
-                    gerber
-                        .debug_render(&mut document, true)
-                        .context("Failed to render gerber debug SVG file.")?;
-
-                    fs::write(output_file, document.render())
-                        .context("Failed to save gerber debug SVG file.")?;
-                }
-
-                // TODO distance_per_step should come from a config file.
-                gerber
-                    .generate_gcode(gcode, job_config, &tool_selection, true)
-                    .context("Failed to generate GCode file.")?;
+                process_gerber_file(
+                    &build_configuration,
+                    machine_config,
+                    job_config,
+                    gerber_file.as_ref(),
+                    debug_output_directory.as_ref(),
+                    true,
+                    gcode,
+                )?;
             }
             forge_file::Stage::CutBoard {
                 machine_config,
                 gcode_file,
                 file,
             } => {
-                // TODO
                 log::info!("Process cutting stage: {}", file);
+
+                match file {
+                    forge_file::CutBoardFile::Gerber(gerber_file) => {
+                        let gcode = gcode_files.entry(gcode_file.clone()).or_default();
+
+                        let machine_config_path = machine_config
+                            .as_ref()
+                            .or(global_config.default_cutter.as_ref())
+                            .context(
+                                "An engraver was not specified and a global default is not set.",
+                            )?;
+                        log::info!("Using machine configuration: {}", machine_config_path);
+
+                        let mut machine_config_path = machine_config_path.iter();
+                        let machine_name = machine_config_path
+                            .next()
+                            .context("Machine name not provided by machine config path.")?
+                            .to_string();
+                        let machine_profile = machine_config_path
+                            .next()
+                            .context("Machine profile not provided by machine config path.")?
+                            .to_string();
+
+                        if machine_config_path.next().is_some() {
+                            bail!("Too many parts to machine config path.");
+                        }
+
+                        let machine_config = forge_file
+                            .machines
+                            .get(&machine_name)
+                            .or(global_config.machines.get(&machine_name))
+                            .context("Failed to find machine configuration.")?;
+
+                        let job_config = machine_config
+                            .cutting_configs
+                            .get(&machine_profile)
+                            .context("Failed to find machine profile.")?;
+
+                        process_gerber_file(
+                            &build_configuration,
+                            machine_config,
+                            job_config,
+                            gerber_file.as_ref(),
+                            debug_output_directory.as_ref(),
+                            false,
+                            gcode,
+                        )?;
+                    }
+                    forge_file::CutBoardFile::Drill(drill_file) => {
+                        log::error!("Drill files are not yet supported.");
+                    }
+                }
             }
         }
     }
@@ -231,6 +204,114 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
             .with_context(|| format!("Failed to produce GCode for file: {:?}", path))?;
         fs::write(output_file, output).context("Failed to save GCode file.")?;
     }
+
+    Ok(())
+}
+
+fn process_gerber_file(
+    build_configuration: &arguments::BuildCommand,
+    machine_config: &Machine,
+    job_config: &JobConfig,
+    gerber_file: &Path,
+    debug_output_directory: Option<&PathBuf>,
+    generate_infill: bool,
+    gcode: &mut Vec<GCommand>,
+) -> Result<()> {
+    log::info!("Tool Info: {}", job_config.tool_power);
+
+    let mut tool_path = job_config.tool.ancestors();
+    let tool_name = tool_path
+        .next()
+        .context("no tool name provided")?
+        .to_string();
+
+    log::info!("Using tool: {}", tool_name);
+
+    let tool = machine_config
+        .tools
+        .get(&tool_name)
+        .context("Could not find specified tool.")?;
+
+    let bit_name = tool_path.next().map(|name| name.to_string());
+
+    let tool_selection = match tool {
+        Tool::Laser(laser) => ToolSelection::Laser { laser },
+        Tool::Spindle(spindle) => {
+            let bit_name = bit_name.context("No bit name provided for spindle.")?;
+            log::info!("Using bit: {}", bit_name);
+            ToolSelection::Spindle {
+                spindle,
+                bit: spindle
+                    .bits
+                    .get(&bit_name)
+                    .context("Spindle does not have a bit with requested name.")?,
+            }
+        }
+    };
+
+    let file_path = build_configuration
+        .forge_file_path
+        .parent()
+        .context("Could not get working directory of forge file.")?
+        .join(gerber_file);
+
+    let mut gerber = GerberFile::default();
+
+    // We load the file, or at least attempt to. We'll handle an error condition later.
+    let load_result =
+        gerber_file::load(&mut gerber, &file_path).context("Failed to load gerber file.");
+
+    // Debug render if applicable.
+    if let Some(debug_output_directory) = debug_output_directory.as_ref() {
+        let output_file = debug_output_directory.join("gerber.svg");
+        let bounds = gerber.calculate_svg_bounds();
+
+        let mut document = svg_composer::Document::new(
+            Vec::new(),
+            Some([
+                bounds.0 as f32,
+                bounds.1 as f32,
+                bounds.2 as f32,
+                bounds.3 as f32,
+            ]),
+        );
+        gerber
+            .debug_render(&mut document, false)
+            .context("Failed to render gerber debug SVG file.")?;
+
+        fs::write(output_file, document.render())
+            .context("Failed to save gerber debug SVG file.")?;
+    }
+
+    // Okay cool, now you can handle the error.
+    load_result?;
+
+    // Debug render if applicable.
+    if let Some(debug_output_directory) = debug_output_directory.as_ref() {
+        let output_file = debug_output_directory.join("gerber_simplified.svg");
+        let bounds = gerber.calculate_svg_bounds();
+
+        let mut document = svg_composer::Document::new(
+            Vec::new(),
+            Some([
+                bounds.0 as f32,
+                bounds.1 as f32,
+                bounds.2 as f32,
+                bounds.3 as f32,
+            ]),
+        );
+
+        gerber
+            .debug_render(&mut document, true)
+            .context("Failed to render gerber debug SVG file.")?;
+
+        fs::write(output_file, document.render())
+            .context("Failed to save gerber debug SVG file.")?;
+    }
+
+    gerber
+        .generate_gcode(gcode, job_config, &tool_selection, generate_infill)
+        .context("Failed to generate GCode file.")?;
 
     Ok(())
 }

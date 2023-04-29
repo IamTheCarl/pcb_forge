@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use geo::{BooleanOps, Coord, MultiPolygon};
+use geo::{BooleanOps, BoundingRect, Contains, Coord, MultiPolygon};
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use std::{collections::HashMap, fs, ops::Deref, path::Path};
 use svg_composer::{
@@ -44,6 +44,7 @@ impl GerberFile {
         job_config: &JobConfig,
         tool_config: &ToolSelection,
     ) -> Result<GCodeFile> {
+        log::info!("Simplifying geometry.");
         let distance_per_step = job_config.distance_per_step.get::<millimeter>();
 
         let mut polygon = Vec::new();
@@ -53,13 +54,13 @@ impl GerberFile {
             polygon.push(shape.convert_to_geo_polygon(distance_per_step));
         }
 
-        let union = polygon
+        let polygon = polygon
             .iter()
             .fold(MultiPolygon::new(vec![]), |previous, polygon| {
                 let polygon = MultiPolygon::new(vec![polygon.clone()]);
                 previous.union(&polygon)
             });
-        // let union = MultiPolygon::new(polygon);
+        // let polygon = MultiPolygon::new(polygon);
 
         match job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
@@ -106,19 +107,65 @@ impl GerberFile {
                     }
                 }
 
-                let polygon = union.0;
-                for polygon in polygon.iter() {
-                    add_point_string(&mut commands, polygon.exterior().0.iter());
+                {
+                    let polygon = &polygon.0;
+                    for polygon in polygon.iter() {
+                        add_point_string(&mut commands, polygon.exterior().0.iter());
 
-                    for interior in polygon.interiors() {
-                        add_point_string(&mut commands, interior.0.iter());
+                        for interior in polygon.interiors() {
+                            add_point_string(&mut commands, interior.0.iter());
+                        }
                     }
                 }
 
-                // // TODO Now we generate the infill.
-                // let (min_x, min_y, max_x, max_y) = self.calculate_bounds();
-                // let (span_x, span_y) = (max_x - min_x, max_y - min_y);
-                // // let (delta_x, delta_y) = (span_x / tool_config)
+                // Now we generate the infill.
+                log::info!("Generating infill.");
+                let bounds = polygon
+                    .bounding_rect()
+                    .context("Could not compute bounds for PCB.")?;
+
+                {
+                    let mut y = bounds.min().y;
+                    while y < bounds.max().y {
+                        println!(
+                            "{}",
+                            (y - bounds.min().y) / (bounds.max().y - bounds.min().y)
+                        );
+                        let mut x = bounds.min().x;
+                        let mut start = None;
+                        let mut end = None;
+
+                        while x < bounds.max().y {
+                            let point = Coord { x, y };
+
+                            if !polygon.contains(&point) {
+                                if start.is_none() {
+                                    start = Some(x);
+                                }
+
+                                end = Some(x);
+                            } else if let (Some(start), Some(end)) = (start.take(), end.take()) {
+                                commands.push(GCommand::MoveTo {
+                                    target: (
+                                        Length::new::<millimeter>(start),
+                                        Length::new::<millimeter>(y),
+                                    ),
+                                });
+                                commands.push(GCommand::Cut {
+                                    movement: MovementType::Linear,
+                                    target: (
+                                        Length::new::<millimeter>(end),
+                                        Length::new::<millimeter>(y),
+                                    ),
+                                });
+                            }
+
+                            x += (tool_config.diameter() / 2.0).get::<millimeter>();
+                        }
+
+                        y += (tool_config.diameter() / 2.0).get::<millimeter>();
+                    }
+                }
 
                 Ok(GCodeFile::new(laser_power, commands))
             }

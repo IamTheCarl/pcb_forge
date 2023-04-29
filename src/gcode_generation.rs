@@ -160,3 +160,15 @@ pub enum ToolSelection<'a> {
         bit: &'a SpindleBit,
     },
 }
+
+impl<'a> ToolSelection<'a> {
+    pub fn diameter(&self) -> Length<uom::si::SI<f32>, f32> {
+        match self {
+            ToolSelection::Laser { laser } => laser.point_diameter,
+            ToolSelection::Spindle { spindle: _, bit } => match bit {
+                SpindleBit::Drill { diameter } => *diameter,
+                SpindleBit::EndMill { diameter } => *diameter,
+            },
+        }
+    }
+}

@@ -8,7 +8,6 @@ use anyhow::{bail, Context, Result};
 
 mod arguments;
 mod config;
-use camino::Utf8PathBuf;
 use config::{
     machine::{JobConfig, Machine},
     Config,

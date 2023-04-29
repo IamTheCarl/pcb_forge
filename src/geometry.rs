@@ -492,24 +492,24 @@ impl Segment {
     fn debug_render(&self) -> Box<dyn Command> {
         match self {
             Segment::Line { end } => Box::new(LineTo {
-                point: (end.x as f64, end.y as f64),
+                point: (end.x, end.y),
                 option: LineToOption::Default,
                 coordinate_type: CoordinateType::Absolute,
             }),
             Segment::ClockwiseCurve { end, diameter } => Box::new(SvgArc {
-                radius: (*diameter as f64 / 2.0, *diameter as f64 / 2.0),
+                radius: (*diameter / 2.0, *diameter / 2.0),
                 x_axis_rotation: 0.0,
                 large_arc_flag: false,
                 sweep_flag: false, // Clockwise
-                point: (end.x as f64, end.y as f64),
+                point: (end.x, end.y),
                 coordinate_type: CoordinateType::Absolute,
             }),
             Segment::CounterClockwiseCurve { end, diameter } => Box::new(SvgArc {
-                radius: (*diameter as f64 / 2.0, *diameter as f64 / 2.0),
+                radius: (*diameter / 2.0, *diameter / 2.0),
                 x_axis_rotation: 0.0,
                 large_arc_flag: false,
                 sweep_flag: true, // CounterClockwise
-                point: (end.x as f64, end.y as f64),
+                point: (end.x, end.y),
                 coordinate_type: CoordinateType::Absolute,
             }),
         }

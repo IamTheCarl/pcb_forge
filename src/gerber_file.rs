@@ -273,6 +273,8 @@ impl GerberFile {
                         finalize_progress_bar();
                     }
 
+                    commands.push(GCommand::RemoveTool);
+
                     Ok(())
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");

@@ -13,6 +13,7 @@ use config::{
     Config,
 };
 use gcode_generation::GCommand;
+mod drill_file;
 mod gcode_generation;
 mod geometry;
 mod gerber_file;
@@ -194,30 +195,11 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                             .context("Could not get working directory of forge file.")?
                             .join(drill_file);
 
-                        let drill_file_content = fs::read_to_string(&file_path)
-                            .context("Failed to read drill file from disk.")?;
-                        match parsing::drill::parse_drill_file(parsing::drill::Span::new(
-                            &drill_file_content,
-                        )) {
-                            Ok(drill_file) => {
-                                dbg!(drill_file);
-                            }
-                            Err(error) => match error {
-                                nom::Err::Error(error) | nom::Err::Failure(error) => {
-                                    let _ = error;
-                                    bail!(
-                                        "Failed to parse gerber file {}:{}:{} - {:?}",
-                                        file_path.to_string_lossy(),
-                                        error.input.location_line(),
-                                        error.input.get_utf8_column(),
-                                        error.code,
-                                    )
-                                }
-                                nom::Err::Incomplete(_) => {
-                                    bail!("Failed to parse gerber file: Unexpected EOF")
-                                }
-                            },
-                        }
+                        let mut drill_file = drill_file::DrillFile::default();
+                        drill_file::load(&mut drill_file, &file_path)
+                            .context("Failed to load drill file.")?;
+
+                        dbg!(drill_file);
                     }
                 }
             }

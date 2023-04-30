@@ -2,13 +2,19 @@ use std::{collections::HashMap, fs, path::Path};
 
 use anyhow::{bail, Context, Result};
 use nalgebra::Vector2;
-use uom::si::length::{mil, millimeter, Length};
+use uom::si::{
+    length::{inch, millimeter, Length},
+    ratio::{percent, Ratio},
+    velocity::{millimeter_per_second, Velocity},
+};
 
 use crate::{
+    config::machine::JobConfig,
+    gcode_generation::{CurveType, GCommand, MovementType, ToolSelection},
     geometry::Shape,
     parsing::{
         self,
-        drill::{self, DrillCommand, HeaderCommand},
+        drill::{DrillCommand, HeaderCommand},
         UnitMode,
     },
 };
@@ -19,10 +25,166 @@ pub struct DrillFile {
     paths: Vec<DrillPath>,
 }
 
-#[derive(Debug)]
+impl DrillFile {
+    pub fn generate_gcode(
+        &self,
+        commands: &mut Vec<GCommand>,
+        job_config: &JobConfig,
+        tool_config: &ToolSelection,
+    ) -> Result<()> {
+        match job_config.tool_power {
+            crate::config::machine::ToolConfig::Laser {
+                laser_power,
+                work_speed,
+            } => {
+                let distance_per_step = job_config.distance_per_step.get::<millimeter>();
+
+                if let ToolSelection::Laser { laser } = tool_config {
+                    commands.extend(
+                        [
+                            GCommand::EquipLaser {
+                                max_power: laser.max_power,
+                            },
+                            GCommand::AbsoluteMode,
+                            GCommand::UnitMode(UnitMode::Metric),
+                            GCommand::SetRapidTransverseSpeed(
+                                Velocity::new::<millimeter_per_second>(
+                                    3000.0, // TODO this should come from the config file.
+                                ),
+                            ),
+                            GCommand::SetWorkSpeed(work_speed),
+                            GCommand::SetPower(laser_power),
+                            GCommand::SetFanPower {
+                                index: 0,
+                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                            },
+                        ]
+                        .iter()
+                        .cloned(),
+                    );
+
+                    let mut holes = self.holes.clone();
+                    let mut last_position = Vector2::new(0.0, 0.0);
+
+                    while !holes.is_empty() {
+                        let mut last_distance = f64::INFINITY;
+                        let mut hole_selection = 0;
+
+                        for (hole_index, hole) in holes.iter().enumerate() {
+                            let distance_to_hole = (hole.position - last_position).norm();
+                            if distance_to_hole < last_distance {
+                                last_distance = distance_to_hole;
+                                hole_selection = hole_index;
+                            }
+                        }
+
+                        let hole = holes.remove(hole_selection);
+
+                        hole.generate_gcode(
+                            distance_per_step,
+                            commands,
+                            tool_config.diameter().get::<millimeter>(),
+                        );
+                        last_position = hole.position;
+                    }
+
+                    // TODO render paths.
+
+                    commands.push(GCommand::RemoveTool);
+
+                    Ok(())
+                } else {
+                    bail!("Job was configured for a laser but selected tool is not a laser.");
+                }
+            }
+            crate::config::machine::ToolConfig::Drill {
+                spindle_rpm,
+                plunge_speed,
+            } => bail!("drilling drill files is not yet supported"),
+            crate::config::machine::ToolConfig::EndMill {
+                spindle_rpm,
+                max_cut_depth,
+                plunge_speed,
+                work_speed,
+            } => bail!("milling drill files is not yet supported"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct DrillHole {
     position: Vector2<f64>,
     diameter: f64,
+}
+
+impl DrillHole {
+    /// Create the hole using a laser or router bit.
+    fn generate_gcode(
+        &self,
+        distance_per_step: f64,
+        commands: &mut Vec<GCommand>,
+        tool_diameter: f64,
+    ) {
+        let tool_radius = tool_diameter / 2.0;
+        let inner_diameter = self.diameter - tool_radius;
+        let inner_radius = inner_diameter / 2.0;
+
+        let starting_point = self.position + Vector2::new(inner_radius, 0.0);
+        let intermediate_point = self.position - Vector2::new(inner_radius, 0.0);
+
+        commands.push(GCommand::MoveTo {
+            target: (
+                Length::new::<millimeter>(starting_point.x),
+                Length::new::<millimeter>(starting_point.y),
+            ),
+        });
+        // Works right on simulators, works wrong on actual machine.
+        // commands.push(GCommand::Cut {
+        //     movement: MovementType::ClockwiseCurve(CurveType::Center(
+        //         Length::new::<millimeter>(self.position.x),
+        //         Length::new::<millimeter>(self.position.y),
+        //     )),
+        //     target: (
+        //         Length::new::<millimeter>(starting_point.x),
+        //         Length::new::<millimeter>(starting_point.y),
+        //     ),
+        // });
+
+        let center_to_start = starting_point;
+
+        let arch_length = std::f64::consts::PI * 2.0 * inner_radius;
+        let steps = (arch_length / distance_per_step).ceil();
+
+        let angle_step = std::f64::consts::PI * 2.0 / steps;
+
+        let steps = steps as usize;
+
+        for step_index in 0..steps {
+            let angle = angle_step * step_index as f64;
+
+            let (sin, cos) = angle.sin_cos();
+            let offset = Vector2::new(cos, sin) * inner_radius;
+
+            let new_position = self.position + offset;
+            commands.push(GCommand::Cut {
+                movement: MovementType::Linear,
+                target: (
+                    Length::new::<millimeter>(new_position.x),
+                    Length::new::<millimeter>(new_position.y),
+                ),
+            });
+        }
+
+        commands.push(GCommand::Cut {
+            movement: MovementType::Linear,
+            target: (
+                Length::new::<millimeter>(starting_point.x),
+                Length::new::<millimeter>(starting_point.y),
+            ),
+        });
+
+        // Use an approximation for now.
+    }
 }
 
 #[derive(Debug)]
@@ -57,7 +219,7 @@ impl DrillingContext {
         // Convert to mm for internal representation.
         match self.unit_mode {
             UnitMode::Metric => Length::<uom::si::SI<f64>, f64>::new::<millimeter>(axis),
-            UnitMode::Imperial => Length::<uom::si::SI<f64>, f64>::new::<mil>(axis),
+            UnitMode::Imperial => Length::<uom::si::SI<f64>, f64>::new::<inch>(axis),
         }
         .get::<millimeter>()
     }

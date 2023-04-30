@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 
 mod arguments;
 mod config;
+use camino::Utf8PathBuf;
 use config::{
     machine::{JobConfig, Machine},
     Config,
@@ -24,6 +25,7 @@ use crate::{
     forge_file::ForgeFile,
     gcode_generation::{GCodeFile, ToolSelection},
     gerber_file::GerberFile,
+    parsing::drill,
 };
 mod forge_file;
 
@@ -141,43 +143,41 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
             } => {
                 log::info!("Process cutting stage: {}", file);
 
+                let gcode = gcode_files.entry(gcode_file.clone()).or_default();
+
+                let machine_config_path = machine_config
+                    .as_ref()
+                    .or(global_config.default_cutter.as_ref())
+                    .context("An engraver was not specified and a global default is not set.")?;
+                log::info!("Using machine configuration: {}", machine_config_path);
+
+                let mut machine_config_path = machine_config_path.iter();
+                let machine_name = machine_config_path
+                    .next()
+                    .context("Machine name not provided by machine config path.")?
+                    .to_string();
+                let machine_profile = machine_config_path
+                    .next()
+                    .context("Machine profile not provided by machine config path.")?
+                    .to_string();
+
+                if machine_config_path.next().is_some() {
+                    bail!("Too many parts to machine config path.");
+                }
+
+                let machine_config = forge_file
+                    .machines
+                    .get(&machine_name)
+                    .or(global_config.machines.get(&machine_name))
+                    .context("Failed to find machine configuration.")?;
+
+                let job_config = machine_config
+                    .cutting_configs
+                    .get(&machine_profile)
+                    .context("Failed to find machine profile.")?;
+
                 match file {
                     forge_file::CutBoardFile::Gerber(gerber_file) => {
-                        let gcode = gcode_files.entry(gcode_file.clone()).or_default();
-
-                        let machine_config_path = machine_config
-                            .as_ref()
-                            .or(global_config.default_cutter.as_ref())
-                            .context(
-                                "An engraver was not specified and a global default is not set.",
-                            )?;
-                        log::info!("Using machine configuration: {}", machine_config_path);
-
-                        let mut machine_config_path = machine_config_path.iter();
-                        let machine_name = machine_config_path
-                            .next()
-                            .context("Machine name not provided by machine config path.")?
-                            .to_string();
-                        let machine_profile = machine_config_path
-                            .next()
-                            .context("Machine profile not provided by machine config path.")?
-                            .to_string();
-
-                        if machine_config_path.next().is_some() {
-                            bail!("Too many parts to machine config path.");
-                        }
-
-                        let machine_config = forge_file
-                            .machines
-                            .get(&machine_name)
-                            .or(global_config.machines.get(&machine_name))
-                            .context("Failed to find machine configuration.")?;
-
-                        let job_config = machine_config
-                            .cutting_configs
-                            .get(&machine_profile)
-                            .context("Failed to find machine profile.")?;
-
                         process_gerber_file(
                             &build_configuration,
                             machine_config,
@@ -199,7 +199,11 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                         drill_file::load(&mut drill_file, &file_path)
                             .context("Failed to load drill file.")?;
 
-                        dbg!(drill_file);
+                        let tool_selection = get_tool_selection(machine_config, &job_config.tool)?;
+
+                        drill_file
+                            .generate_gcode(gcode, job_config, &tool_selection)
+                            .context("Failed to generate gcode file.")?;
                     }
                 }
             }
@@ -229,35 +233,7 @@ fn process_gerber_file(
 ) -> Result<()> {
     log::info!("Tool Info: {}", job_config.tool_power);
 
-    let mut tool_path = job_config.tool.ancestors();
-    let tool_name = tool_path
-        .next()
-        .context("no tool name provided")?
-        .to_string();
-
-    log::info!("Using tool: {}", tool_name);
-
-    let tool = machine_config
-        .tools
-        .get(&tool_name)
-        .context("Could not find specified tool.")?;
-
-    let bit_name = tool_path.next().map(|name| name.to_string());
-
-    let tool_selection = match tool {
-        Tool::Laser(laser) => ToolSelection::Laser { laser },
-        Tool::Spindle(spindle) => {
-            let bit_name = bit_name.context("No bit name provided for spindle.")?;
-            log::info!("Using bit: {}", bit_name);
-            ToolSelection::Spindle {
-                spindle,
-                bit: spindle
-                    .bits
-                    .get(&bit_name)
-                    .context("Spindle does not have a bit with requested name.")?,
-            }
-        }
-    };
+    let tool_selection = get_tool_selection(machine_config, &job_config.tool)?;
 
     let file_path = build_configuration
         .forge_file_path
@@ -324,4 +300,40 @@ fn process_gerber_file(
         .context("Failed to generate GCode file.")?;
 
     Ok(())
+}
+
+fn get_tool_selection<'a>(
+    machine_config: &'a Machine,
+    tool_path: &Utf8PathBuf,
+) -> Result<ToolSelection<'a>> {
+    log::info!("Using tool: {}", tool_path);
+
+    let mut tool_path = tool_path.ancestors();
+
+    let tool_name = tool_path
+        .next()
+        .context("no tool name provided")?
+        .to_string();
+
+    let tool = machine_config
+        .tools
+        .get(&tool_name)
+        .context("Could not find specified tool.")?;
+
+    let bit_name = tool_path.next().map(|name| name.to_string());
+
+    Ok(match tool {
+        Tool::Laser(laser) => ToolSelection::Laser { laser },
+        Tool::Spindle(spindle) => {
+            let bit_name = bit_name.context("No bit name provided for spindle.")?;
+            log::info!("Using bit: {}", bit_name);
+            ToolSelection::Spindle {
+                spindle,
+                bit: spindle
+                    .bits
+                    .get(&bit_name)
+                    .context("Spindle does not have a bit with requested name.")?,
+            }
+        }
+    })
 }

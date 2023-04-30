@@ -45,12 +45,15 @@ pub enum GCommand {
 #[allow(dead_code)]
 pub enum MovementType {
     Linear,
-    ClockwiseCurve {
-        diameter: Length<uom::si::SI<f64>, f64>,
-    },
-    CounterClockwiseCurve {
-        diameter: Length<uom::si::SI<f64>, f64>,
-    },
+    ClockwiseCurve(CurveType),
+    CounterClockwiseCurve(CurveType),
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum CurveType {
+    Diameter(Length<uom::si::SI<f64>, f64>),
+    Center(Length<uom::si::SI<f64>, f64>, Length<uom::si::SI<f64>, f64>),
 }
 
 pub struct GCodeFile {
@@ -113,24 +116,54 @@ impl GCodeFile {
 
                     match movement {
                         MovementType::Linear => writeln!(&mut output, "G1 X{} Y{}", x, y),
-                        MovementType::ClockwiseCurve { diameter } => {
-                            let radius = *diameter / 2.0;
-                            let radius = match unit_mode {
-                                UnitMode::Metric => radius.get::<millimeter>(),
-                                UnitMode::Imperial => radius.get::<mil>(),
-                            };
+                        MovementType::ClockwiseCurve(curve) => match curve {
+                            CurveType::Diameter(diameter) => {
+                                let radius = *diameter / 2.0;
+                                let radius = match unit_mode {
+                                    UnitMode::Metric => radius.get::<millimeter>(),
+                                    UnitMode::Imperial => radius.get::<mil>(),
+                                };
 
-                            writeln!(&mut output, "G2 X{} Y{} R{}", x, y, radius)
-                        }
-                        MovementType::CounterClockwiseCurve { diameter } => {
-                            let radius = *diameter / 2.0;
-                            let radius = match unit_mode {
-                                UnitMode::Metric => radius.get::<millimeter>(),
-                                UnitMode::Imperial => radius.get::<mil>(),
-                            };
+                                writeln!(&mut output, "G2 X{} Y{} R{}", x, y, radius)
+                            }
+                            CurveType::Center(i, j) => {
+                                let (i, j) = match unit_mode {
+                                    UnitMode::Metric => {
+                                        (i.get::<millimeter>(), j.get::<millimeter>())
+                                    }
+                                    UnitMode::Imperial => (i.get::<mil>(), j.get::<mil>()),
+                                };
 
-                            writeln!(&mut output, "G3 X{} Y{} R{}", x, y, radius)
-                        }
+                                // Position needs to be relative to X,Y
+                                let (i, j) = (i - x, j - y);
+
+                                writeln!(&mut output, "G2 X{} Y{} I{} J{}", x, y, i, j)
+                            }
+                        },
+                        MovementType::CounterClockwiseCurve(curve) => match curve {
+                            CurveType::Diameter(diameter) => {
+                                let radius = *diameter / 2.0;
+                                let radius = match unit_mode {
+                                    UnitMode::Metric => radius.get::<millimeter>(),
+                                    UnitMode::Imperial => radius.get::<mil>(),
+                                };
+
+                                writeln!(&mut output, "G3 X{} Y{} R{}", x, y, radius)
+                            }
+                            CurveType::Center(i, j) => {
+                                let (i, j) = match unit_mode {
+                                    UnitMode::Metric => {
+                                        (i.get::<millimeter>(), j.get::<millimeter>())
+                                    }
+                                    UnitMode::Imperial => (i.get::<mil>(), j.get::<mil>()),
+                                };
+
+                                // Position needs to be relative to X,Y
+                                let (i, j) = (i - x, j - y);
+
+                                writeln!(&mut output, "G3 X{} Y{} I{} J{}", x, y, i, j)
+                            }
+                        },
                     }
                 }
                 GCommand::MoveTo { target: (x, y) } => {

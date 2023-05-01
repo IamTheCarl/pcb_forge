@@ -90,6 +90,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 gerber_file,
                 gcode_file,
                 backside,
+                invert,
             } => {
                 log::info!("Process engrave stage: {:?}", gerber_file);
 
@@ -132,15 +133,16 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .get(&machine_profile)
                     .context("Failed to find machine profile.")?;
 
-                process_gerber_file(
-                    &build_configuration,
+                process_gerber_file(GerberConfig {
+                    build_configuration: &build_configuration,
                     machine_config,
                     job_config,
-                    gerber_file.as_ref(),
-                    debug_output_directory.as_ref(),
-                    true,
+                    invert: *invert,
+                    gerber_file: gerber_file.as_ref(),
+                    debug_output_directory: debug_output_directory.as_ref(),
+                    generate_infill: true,
                     gcode,
-                )?;
+                })?;
             }
             forge_file::Stage::CutBoard {
                 machine_config,
@@ -191,15 +193,16 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
 
                 match file {
                     forge_file::CutBoardFile::Gerber(gerber_file) => {
-                        process_gerber_file(
-                            &build_configuration,
+                        process_gerber_file(GerberConfig {
+                            build_configuration: &build_configuration,
                             machine_config,
                             job_config,
-                            gerber_file.as_ref(),
-                            debug_output_directory.as_ref(),
-                            false,
+                            invert: false,
+                            gerber_file: gerber_file.as_ref(),
+                            debug_output_directory: debug_output_directory.as_ref(),
+                            generate_infill: false,
                             gcode,
-                        )?;
+                        })?;
                     }
                     forge_file::CutBoardFile::Drill(drill_file) => {
                         let file_path = build_configuration
@@ -235,24 +238,28 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     Ok(())
 }
 
-fn process_gerber_file(
-    build_configuration: &arguments::BuildCommand,
-    machine_config: &Machine,
-    job_config: &JobConfig,
-    gerber_file: &Path,
-    debug_output_directory: Option<&PathBuf>,
+struct GerberConfig<'a> {
+    build_configuration: &'a arguments::BuildCommand,
+    machine_config: &'a Machine,
+    job_config: &'a JobConfig,
+    invert: bool,
+    gerber_file: &'a Path,
+    debug_output_directory: Option<&'a PathBuf>,
     generate_infill: bool,
-    gcode: &mut Vec<GCommand>,
-) -> Result<()> {
-    log::info!("Tool Info: {}", job_config.tool_power);
+    gcode: &'a mut Vec<GCommand>,
+}
 
-    let tool_selection = get_tool_selection(machine_config, &job_config.tool)?;
+fn process_gerber_file(config: GerberConfig) -> Result<()> {
+    log::info!("Tool Info: {}", config.job_config.tool_power);
 
-    let file_path = build_configuration
+    let tool_selection = get_tool_selection(config.machine_config, &config.job_config.tool)?;
+
+    let file_path = config
+        .build_configuration
         .forge_file_path
         .parent()
         .context("Could not get working directory of forge file.")?
-        .join(gerber_file);
+        .join(config.gerber_file);
 
     let mut gerber = GerberFile::default();
 
@@ -261,7 +268,7 @@ fn process_gerber_file(
         gerber_file::load(&mut gerber, &file_path).context("Failed to load gerber file.");
 
     // Debug render if applicable.
-    if let Some(debug_output_directory) = debug_output_directory.as_ref() {
+    if let Some(debug_output_directory) = config.debug_output_directory.as_ref() {
         let output_file = debug_output_directory.join("gerber.svg");
         let bounds = gerber.calculate_svg_bounds();
 
@@ -286,7 +293,7 @@ fn process_gerber_file(
     load_result?;
 
     // Debug render if applicable.
-    if let Some(debug_output_directory) = debug_output_directory.as_ref() {
+    if let Some(debug_output_directory) = config.debug_output_directory.as_ref() {
         let output_file = debug_output_directory.join("gerber_simplified.svg");
         let bounds = gerber.calculate_svg_bounds();
 
@@ -309,7 +316,13 @@ fn process_gerber_file(
     }
 
     gerber
-        .generate_gcode(gcode, job_config, &tool_selection, generate_infill)
+        .generate_gcode(
+            config.gcode,
+            config.job_config,
+            &tool_selection,
+            config.generate_infill,
+            config.invert,
+        )
         .context("Failed to generate GCode file.")?;
 
     Ok(())

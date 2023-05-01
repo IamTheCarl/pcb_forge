@@ -45,6 +45,9 @@ pub enum Stage {
 
         #[serde(default)]
         backside: bool,
+
+        #[serde(default)]
+        invert: bool,
     },
     #[serde(rename = "cut_board")]
     CutBoard {

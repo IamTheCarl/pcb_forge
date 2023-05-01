@@ -50,6 +50,7 @@ impl GerberFile {
         job_config: &JobConfig,
         tool_config: &ToolSelection,
         generate_infill: bool,
+        invert: bool,
     ) -> Result<()> {
         log::info!("Simplifying geometry.");
         let distance_per_step = job_config.distance_per_step.get::<millimeter>();
@@ -70,9 +71,14 @@ impl GerberFile {
         // let polygon = MultiPolygon::new(polygon);
 
         // Apply offsets from laser.
-        let polygon = polygon
-            .offset(tool_config.diameter().get::<millimeter>() / 2.0)
-            .map_err(|error| anyhow!("Failed to apply beam offset: {:?}", error))?;
+        let polygon = if invert {
+            // No need for adjustment.
+            polygon
+        } else {
+            polygon
+                .offset(tool_config.diameter().get::<millimeter>() / 2.0)
+                .map_err(|error| anyhow!("Failed to apply beam offset: {:?}", error))?
+        };
 
         match job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
@@ -176,7 +182,7 @@ impl GerberFile {
                             while x < max_x {
                                 let point = Coord { x, y };
 
-                                if !polygon.contains(&point) {
+                                if !polygon.contains(&point) ^ invert {
                                     if start.is_none() {
                                         start = Some(x);
                                     }
@@ -541,49 +547,44 @@ impl<'a> PlottingContext<'a> {
                 self.current_aperture = index;
             }
             GerberCommand::Operation(operation) => match operation {
-                Operation::Plot { x, y, i: _, j: _ } => match self.draw_mode {
-                    DrawMode::Linear => {
-                        let mut next_point = self.current_point;
+                Operation::Plot { x, y, i, j } => {
+                    let mut next_point = self.current_point;
 
-                        if let Some(x) = x {
-                            next_point.x = self.format.internalize_coordinate_from_span(x)?;
-                        }
-
-                        if let Some(y) = y {
-                            next_point.y = self.format.internalize_coordinate_from_span(y)?;
-                        }
-
-                        let aperture = self
-                            .aperture_definitions
-                            .get(&self.current_aperture)
-                            .context("Aperture was never equipped.")?;
-
-                        if let ApertureTemplate::Circle {
-                            diameter,
-                            hole_diameter,
-                        } = aperture
-                        {
-                            if hole_diameter.is_none() {
-                                let shape = Shape::line(
-                                    self.calculate_transformation_matrix(),
-                                    self.polarity,
-                                    *diameter,
-                                    self.current_point,
-                                    next_point,
-                                );
-                                self.current_point = next_point;
-
-                                gerber_file.shapes.push(shape);
-                            } else {
-                                bail!("Circles used for line draws cannot have a hole in them.")
-                            }
-                        } else {
-                            bail!("Only circles are supported for line draws.")
-                        }
+                    if let Some(x) = x {
+                        next_point.x = self.format.internalize_coordinate_from_span(x)?;
                     }
-                    DrawMode::Clockwise => bail!("Unimplemented 1."),
-                    DrawMode::CounterClockwise => bail!("Unimplemented 2."),
-                },
+
+                    if let Some(y) = y {
+                        next_point.y = self.format.internalize_coordinate_from_span(y)?;
+                    }
+
+                    let aperture = self
+                        .aperture_definitions
+                        .get(&self.current_aperture)
+                        .context("Aperture was never equipped.")?;
+
+                    if let ApertureTemplate::Circle {
+                        diameter,
+                        hole_diameter,
+                    } = aperture
+                    {
+                        if hole_diameter.is_none() {
+                            let shape = Shape::line(
+                                self.calculate_transformation_matrix(),
+                                self.polarity,
+                                *diameter,
+                                self.current_point,
+                                next_point,
+                            );
+                            self.current_point = next_point;
+                            gerber_file.shapes.push(shape);
+                        } else {
+                            bail!("Circles used for line draws cannot have a hole in them.")
+                        }
+                    } else {
+                        bail!("Only circles are supported for line draws.")
+                    }
+                }
                 Operation::Move { x, y } => {
                     if let Some(x) = x {
                         self.current_point.x = self.format.internalize_coordinate_from_span(x)?;

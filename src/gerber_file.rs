@@ -21,7 +21,7 @@ use uom::si::{
 use crate::{
     config::machine::JobConfig,
     gcode_generation::{GCommand, MovementType, ToolSelection},
-    geometry::{Segment, Shape},
+    geometry::{ArchDirection, Segment, Shape, ShapeConfiguration},
     parsing::{
         gerber::{
             parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent,
@@ -445,7 +445,6 @@ impl Format {
         let decimal = decimal
             .parse::<i32>()
             .context("internal decimal parsing error")?;
-        let sign = decimal.signum();
         let decimal = decimal.abs();
 
         // Get integer part.
@@ -459,6 +458,9 @@ impl Format {
         } else {
             0
         };
+
+        let sign = integer.signum();
+        let integer = integer.abs();
 
         // Combine.
         let new_position = sign as f64
@@ -569,15 +571,68 @@ impl<'a> PlottingContext<'a> {
                     } = aperture
                     {
                         if hole_diameter.is_none() {
-                            let shape = Shape::line(
-                                self.calculate_transformation_matrix(),
-                                self.polarity,
-                                *diameter,
-                                self.current_point,
-                                next_point,
-                            );
+                            match self.draw_mode {
+                                DrawMode::Linear => Shape::line(
+                                    ShapeConfiguration {
+                                        transform: self.calculate_transformation_matrix(),
+                                        shapes: &mut gerber_file.shapes,
+                                        polarity: self.polarity,
+                                    },
+                                    *diameter,
+                                    self.current_point,
+                                    next_point,
+                                ),
+                                DrawMode::Clockwise => {
+                                    let (i, j) = (
+                                        self.format.internalize_coordinate_from_span(
+                                            i.context("I parameter is needed for arcs.")?,
+                                        )?,
+                                        self.format.internalize_coordinate_from_span(
+                                            j.context("J parameter is needed for arcs.")?,
+                                        )?,
+                                    );
+                                    let center = self.current_point + Vector2::new(i, j);
+
+                                    Shape::arch(
+                                        ShapeConfiguration {
+                                            transform: self.calculate_transformation_matrix(),
+                                            shapes: &mut gerber_file.shapes,
+                                            polarity: self.polarity,
+                                        },
+                                        *diameter,
+                                        center,
+                                        self.current_point,
+                                        next_point,
+                                        ArchDirection::Clockwise,
+                                    )
+                                }
+                                DrawMode::CounterClockwise => {
+                                    let (i, j) = (
+                                        self.format.internalize_coordinate_from_span(
+                                            i.context("I parameter is needed for arcs.")?,
+                                        )?,
+                                        self.format.internalize_coordinate_from_span(
+                                            j.context("J parameter is needed for arcs.")?,
+                                        )?,
+                                    );
+                                    let center = self.current_point + Vector2::new(i, j);
+
+                                    Shape::arch(
+                                        ShapeConfiguration {
+                                            transform: self.calculate_transformation_matrix(),
+                                            shapes: &mut gerber_file.shapes,
+                                            polarity: self.polarity,
+                                        },
+                                        *diameter,
+                                        center,
+                                        self.current_point,
+                                        next_point,
+                                        ArchDirection::CounterClockwise,
+                                    )
+                                }
+                            };
+
                             self.current_point = next_point;
-                            gerber_file.shapes.push(shape);
                         } else {
                             bail!("Circles used for line draws cannot have a hole in them.")
                         }
@@ -613,9 +668,11 @@ impl<'a> PlottingContext<'a> {
                             diameter,
                             hole_diameter,
                         } => Shape::circle(
-                            self.calculate_transformation_matrix(),
-                            &mut gerber_file.shapes,
-                            self.polarity,
+                            ShapeConfiguration {
+                                transform: self.calculate_transformation_matrix(),
+                                shapes: &mut gerber_file.shapes,
+                                polarity: self.polarity,
+                            },
                             self.current_point,
                             *diameter,
                             *hole_diameter,
@@ -625,9 +682,11 @@ impl<'a> PlottingContext<'a> {
                             height,
                             hole_diameter,
                         } => Shape::rectangle(
-                            self.calculate_transformation_matrix(),
-                            &mut gerber_file.shapes,
-                            self.polarity,
+                            ShapeConfiguration {
+                                transform: self.calculate_transformation_matrix(),
+                                shapes: &mut gerber_file.shapes,
+                                polarity: self.polarity,
+                            },
                             self.current_point,
                             *width,
                             *height,
@@ -638,9 +697,11 @@ impl<'a> PlottingContext<'a> {
                             height,
                             hole_diameter,
                         } => Shape::obround(
-                            self.calculate_transformation_matrix(),
-                            &mut gerber_file.shapes,
-                            self.polarity,
+                            ShapeConfiguration {
+                                transform: self.calculate_transformation_matrix(),
+                                shapes: &mut gerber_file.shapes,
+                                polarity: self.polarity,
+                            },
                             self.current_point,
                             *width,
                             *height,
@@ -652,9 +713,11 @@ impl<'a> PlottingContext<'a> {
                             rotation,
                             hole_diameter,
                         } => Shape::polygon(
-                            self.calculate_transformation_matrix(),
-                            &mut gerber_file.shapes,
-                            self.polarity,
+                            ShapeConfiguration {
+                                transform: self.calculate_transformation_matrix(),
+                                shapes: &mut gerber_file.shapes,
+                                polarity: self.polarity,
+                            },
                             self.current_point,
                             *diameter,
                             *num_vertices,
@@ -796,22 +859,20 @@ impl<'a> PlottingContext<'a> {
                     }
                     DrawMode::Clockwise => shape.segments.push(Segment::ClockwiseCurve {
                         end: next_point,
-                        diameter: Vector2::new(
-                            i.context("i parameter missing")?,
-                            j.context("j parameter missing")?,
-                        )
-                        .norm()
-                            * 2.0,
+                        center: self.current_point
+                            + Vector2::new(
+                                i.context("i parameter missing")?,
+                                j.context("j parameter missing")?,
+                            ),
                     }),
                     DrawMode::CounterClockwise => {
                         shape.segments.push(Segment::CounterClockwiseCurve {
                             end: next_point,
-                            diameter: Vector2::new(
-                                i.context("i parameter missing")?,
-                                j.context("j parameter missing")?,
-                            )
-                            .norm()
-                                * 2.0,
+                            center: self.current_point
+                                + Vector2::new(
+                                    i.context("i parameter missing")?,
+                                    j.context("j parameter missing")?,
+                                ),
                         })
                     }
                 }
@@ -884,9 +945,11 @@ fn shape_from_aperture_macro(
                 let diameter = diameter.evaluate(&variables)?;
 
                 Shape::circle(
-                    transform,
-                    shapes,
-                    *exposure,
+                    ShapeConfiguration {
+                        transform,
+                        shapes,
+                        polarity: *exposure,
+                    },
                     center_position,
                     diameter,
                     None,
@@ -902,15 +965,18 @@ fn shape_from_aperture_macro(
                 let transform =
                     Rotation2::new(angle.evaluate(&variables)?.to_radians()).matrix() * transform;
 
-                shapes.push(Shape::square_line(
-                    transform,
-                    *exposure,
+                Shape::square_line(
+                    ShapeConfiguration {
+                        transform,
+                        shapes,
+                        polarity: *exposure,
+                    },
                     width.evaluate(&variables)?,
                     Vector2::new(start_x.evaluate(&variables)?, start_y.evaluate(&variables)?)
                         + position,
                     Vector2::new(end_x.evaluate(&variables)?, end_y.evaluate(&variables)?)
                         + position,
-                ));
+                );
             }
             MacroContent::CenterLine {
                 exposure,

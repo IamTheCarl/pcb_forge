@@ -11,6 +11,12 @@ use svg_composer::element::path::{
 
 use crate::parsing::gerber::Polarity;
 
+pub struct ShapeConfiguration<'a> {
+    pub transform: Matrix2<f64>,
+    pub shapes: &'a mut Vec<Shape>,
+    pub polarity: Polarity,
+}
+
 #[derive(Debug)]
 pub struct Shape {
     pub polarity: Polarity,
@@ -21,12 +27,15 @@ pub struct Shape {
 impl Shape {
     pub fn debug_render(&self, path: &mut Vec<Box<dyn Command>>) -> Result<()> {
         path.push(Box::new(MoveTo {
-            point: (self.starting_point.x as f64, self.starting_point.y as f64),
+            point: (self.starting_point.x, self.starting_point.y),
             coordinate_type: CoordinateType::Absolute,
         }));
 
+        let mut previous_end = None;
+
         for segment in self.segments.iter() {
-            path.push(segment.debug_render());
+            path.push(segment.debug_render(previous_end.unwrap_or(self.starting_point)));
+            previous_end = Some(segment.end());
         }
 
         Ok(())
@@ -106,8 +115,8 @@ impl Shape {
                 // It would crash with a subtraction underflow if it somehow matched on the first vertex, which shouldn't be possible.
                 let starting_point = match collected_segments[starting_index - 1] {
                     Segment::Line { end } => end,
-                    Segment::ClockwiseCurve { end, diameter: _ } => end,
-                    Segment::CounterClockwiseCurve { end, diameter: _ } => end,
+                    Segment::ClockwiseCurve { end, center: _ } => end,
+                    Segment::CounterClockwiseCurve { end, center: _ } => end,
                 };
 
                 let segments: Vec<_> = collected_segments.drain(starting_index..).collect();
@@ -140,7 +149,9 @@ impl Shape {
                         SegmentInfo::Line,
                     );
                 }
-                Segment::ClockwiseCurve { end, diameter } => {
+                Segment::ClockwiseCurve { end, center } => {
+                    let diameter = (center - end).norm();
+
                     separator_function(
                         self.polarity,
                         &mut starting_point,
@@ -149,11 +160,13 @@ impl Shape {
                         &mut shapes,
                         *end,
                         SegmentInfo::Clockwise {
-                            diameter: NotNan::new(*diameter).expect("Got NAN"),
+                            diameter: NotNan::new(diameter).expect("Got NAN"),
                         },
                     );
                 }
-                Segment::CounterClockwiseCurve { end, diameter } => {
+                Segment::CounterClockwiseCurve { end, center } => {
+                    let diameter = (center - end).norm();
+
                     separator_function(
                         self.polarity,
                         &mut starting_point,
@@ -162,7 +175,7 @@ impl Shape {
                         &mut shapes,
                         *end,
                         SegmentInfo::CounterClockwise {
-                            diameter: NotNan::new(*diameter).expect("Got NAN"),
+                            diameter: NotNan::new(diameter).expect("Got NAN"),
                         },
                     );
                 }
@@ -235,62 +248,135 @@ impl Shape {
     }
 
     pub fn line(
-        transform: Matrix2<f64>,
-        polarity: Polarity,
+        shape_configuration: ShapeConfiguration,
         diameter: f64,
         start: Vector2<f64>,
         end: Vector2<f64>,
-    ) -> Self {
-        let start = transform * start;
-        let end = transform * end;
+    ) {
+        let start = shape_configuration.transform * start;
+        let end = shape_configuration.transform * end;
 
-        let radius = transform[0] * diameter / 2.0;
-        let direction = (start - end).normalize();
+        let radius = shape_configuration.transform[0] * diameter / 2.0;
+        if let Some(direction) = (start - end).try_normalize(0.0) {
+            let perpendicular = {
+                let mut perpendicular = direction;
+                perpendicular.swap_rows(0, 1);
+                perpendicular.x *= -1.0;
+                perpendicular
+            } * radius;
 
-        let perpendicular = {
-            let mut perpendicular = direction;
-            perpendicular.swap_rows(0, 1);
-            perpendicular.x *= -1.0;
-            perpendicular
-        } * radius;
+            let starting_point = start + perpendicular;
 
-        let starting_point = start + perpendicular;
+            let segments = vec![
+                Segment::ClockwiseCurve {
+                    end: start - perpendicular,
+                    center: start,
+                },
+                Segment::Line {
+                    end: end - perpendicular,
+                },
+                Segment::ClockwiseCurve {
+                    end: end + perpendicular,
+                    center: end,
+                },
+                Segment::Line {
+                    end: start + perpendicular,
+                },
+            ];
 
-        let segments = vec![
-            Segment::ClockwiseCurve {
-                end: start - perpendicular,
-                diameter,
-            },
-            Segment::Line {
-                end: end - perpendicular,
-            },
-            Segment::ClockwiseCurve {
-                end: end + perpendicular,
-                diameter,
-            },
-            Segment::Line {
-                end: start + perpendicular,
-            },
-        ];
-
-        Shape {
-            polarity,
-            starting_point,
-            segments,
+            shape_configuration.shapes.push(Shape {
+                polarity: shape_configuration.polarity,
+                starting_point,
+                segments,
+            });
+        } else {
+            // This in't a line, it's a dot.
+            Self::circle(shape_configuration, start, diameter, None)
         }
     }
 
+    pub fn arch(
+        shape_configuration: ShapeConfiguration,
+        diameter: f64,
+        center: Vector2<f64>,
+        start: Vector2<f64>,
+        end: Vector2<f64>,
+        direction: ArchDirection,
+    ) {
+        let start = shape_configuration.transform * start;
+        let end = shape_configuration.transform * end;
+        let center = shape_configuration.transform * center;
+
+        let radius = shape_configuration.transform[0] * (diameter / 2.0);
+
+        let starting_angle = (start.y - center.y).atan2(start.x - center.x);
+        let starting_direction = starting_angle.sin_cos();
+        let starting_direction = Vector2::new(starting_direction.1, starting_direction.0);
+
+        let ending_angle = (end.y - center.y).atan2(end.x - center.x);
+        let ending_direction = ending_angle.sin_cos();
+        let ending_direction = Vector2::new(ending_direction.1, ending_direction.0);
+
+        let arc_diameter = (start - center).norm();
+
+        let starting_point = center + starting_direction * (arc_diameter - radius);
+
+        let segments = match direction {
+            ArchDirection::Clockwise => vec![
+                Segment::ClockwiseCurve {
+                    end: center + starting_direction * (arc_diameter + radius),
+                    center: center + starting_direction * arc_diameter,
+                },
+                Segment::ClockwiseCurve {
+                    end: center + ending_direction * (arc_diameter + radius),
+                    center,
+                },
+                Segment::ClockwiseCurve {
+                    end: center + ending_direction * (arc_diameter - radius),
+                    center: center + ending_direction * arc_diameter,
+                },
+                Segment::CounterClockwiseCurve {
+                    end: starting_point,
+                    center,
+                },
+            ],
+            ArchDirection::CounterClockwise => vec![
+                Segment::CounterClockwiseCurve {
+                    end: center + starting_direction * (arc_diameter + radius),
+                    center: center + starting_direction * arc_diameter,
+                },
+                Segment::CounterClockwiseCurve {
+                    end: center + ending_direction * (arc_diameter + radius),
+                    center,
+                },
+                Segment::CounterClockwiseCurve {
+                    end: center + ending_direction * (arc_diameter - radius),
+                    center: center + ending_direction * arc_diameter,
+                },
+                Segment::ClockwiseCurve {
+                    end: starting_point,
+                    center,
+                },
+            ],
+        };
+
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
+            starting_point,
+            segments,
+        });
+    }
+
     pub fn square_line(
-        transform: Matrix2<f64>,
-        polarity: Polarity,
+        shape_configuration: ShapeConfiguration,
         width: f64,
         start: Vector2<f64>,
         end: Vector2<f64>,
-    ) -> Self {
-        let start = transform * start;
-        let end = transform * end;
+    ) {
+        let start = shape_configuration.transform * start;
+        let end = shape_configuration.transform * end;
 
-        let half_width = transform[0] * width / 2.0;
+        let half_width = shape_configuration.transform[0] * width / 2.0;
 
         let direction = (start - end).normalize();
         let perpendicular = {
@@ -317,35 +403,35 @@ impl Shape {
             },
         ];
 
-        Shape {
-            polarity,
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
             starting_point,
             segments,
-        }
+        });
     }
 
     pub fn add_hole(
         transform: Matrix2<f64>,
         shapes: &mut Vec<Shape>,
-        position: Vector2<f64>,
+        center: Vector2<f64>,
         hole_diameter: Option<f64>,
     ) {
         if let Some(hole_diameter) = hole_diameter {
-            let position = transform * position;
+            let center = transform * center;
             let radius = transform[0] * hole_diameter / 2.0;
-            let starting_point = position + Vector2::new(radius, 0.0);
+            let starting_point = center + Vector2::new(radius, 0.0);
 
             shapes.push(Shape {
                 polarity: Polarity::Clear,
                 starting_point,
                 segments: vec![
                     Segment::ClockwiseCurve {
-                        end: position - Vector2::new(radius, 0.0),
-                        diameter: hole_diameter,
+                        end: center - Vector2::new(radius, 0.0),
+                        center,
                     },
                     Segment::ClockwiseCurve {
                         end: starting_point,
-                        diameter: hole_diameter,
+                        center,
                     },
                 ],
             });
@@ -353,38 +439,40 @@ impl Shape {
     }
 
     pub fn circle(
-        transform: Matrix2<f64>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
-        position: Vector2<f64>,
+        shape_configuration: ShapeConfiguration,
+        center: Vector2<f64>,
         diameter: f64,
         hole_diameter: Option<f64>,
     ) {
+        let transformed_center = shape_configuration.transform * center;
         let radius = diameter / 2.0;
-        let starting_point = position + Vector2::new(radius, 0.0);
+        let starting_point = transformed_center + Vector2::new(radius, 0.0);
 
-        shapes.push(Shape {
-            polarity,
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
             starting_point,
             segments: vec![
                 Segment::ClockwiseCurve {
-                    end: position - Vector2::new(radius, 0.0),
-                    diameter,
+                    end: transformed_center - Vector2::new(radius, 0.0),
+                    center: transformed_center,
                 },
                 Segment::ClockwiseCurve {
                     end: starting_point,
-                    diameter,
+                    center: transformed_center,
                 },
             ],
         });
 
-        Self::add_hole(transform, shapes, position, hole_diameter);
+        Self::add_hole(
+            shape_configuration.transform,
+            shape_configuration.shapes,
+            center,
+            hole_diameter,
+        );
     }
 
     pub fn rectangle(
-        transform: Matrix2<f64>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
+        shape_configuration: ShapeConfiguration,
         position: Vector2<f64>,
         width: f64,
         height: f64,
@@ -400,32 +488,35 @@ impl Shape {
 
         let starting_point = Vector2::new(right, bottom);
 
-        shapes.push(Shape {
-            polarity,
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
             starting_point,
             segments: vec![
                 Segment::Line {
-                    end: transform * Vector2::new(right, top),
+                    end: shape_configuration.transform * Vector2::new(right, top),
                 },
                 Segment::Line {
-                    end: transform * Vector2::new(left, top),
+                    end: shape_configuration.transform * Vector2::new(left, top),
                 },
                 Segment::Line {
-                    end: transform * Vector2::new(left, bottom),
+                    end: shape_configuration.transform * Vector2::new(left, bottom),
                 },
                 Segment::Line {
-                    end: transform * Vector2::new(right, bottom),
+                    end: shape_configuration.transform * Vector2::new(right, bottom),
                 },
             ],
         });
 
-        Self::add_hole(transform, shapes, position, hole_diameter);
+        Self::add_hole(
+            shape_configuration.transform,
+            shape_configuration.shapes,
+            position,
+            hole_diameter,
+        );
     }
 
     pub fn obround(
-        transform: Matrix2<f64>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
+        shape_configuration: ShapeConfiguration,
         position: Vector2<f64>,
         width: f64,
         height: f64,
@@ -441,34 +532,37 @@ impl Shape {
 
         let starting_point = Vector2::new(right, bottom);
 
-        shapes.push(Shape {
-            polarity,
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
             starting_point,
             segments: vec![
                 Segment::Line {
-                    end: transform * Vector2::new(right, top),
+                    end: shape_configuration.transform * Vector2::new(right, top),
                 },
                 Segment::CounterClockwiseCurve {
-                    end: transform * Vector2::new(left, top),
-                    diameter: transform[0] * half_width,
+                    end: shape_configuration.transform * Vector2::new(left, top),
+                    center: shape_configuration.transform * Vector2::new(position.x, top),
                 },
                 Segment::Line {
-                    end: transform * Vector2::new(left, bottom),
+                    end: shape_configuration.transform * Vector2::new(left, bottom),
                 },
                 Segment::CounterClockwiseCurve {
-                    end: transform * Vector2::new(right, bottom),
-                    diameter: transform[0] * half_width,
+                    end: shape_configuration.transform * Vector2::new(right, bottom),
+                    center: shape_configuration.transform * Vector2::new(position.x, bottom),
                 },
             ],
         });
 
-        Self::add_hole(transform, shapes, position, hole_diameter);
+        Self::add_hole(
+            shape_configuration.transform,
+            shape_configuration.shapes,
+            position,
+            hole_diameter,
+        );
     }
 
     pub fn polygon(
-        transform: Matrix2<f64>,
-        shapes: &mut Vec<Shape>,
-        polarity: Polarity,
+        shape_configuration: ShapeConfiguration,
         position: Vector2<f64>,
         diameter: f64,
         num_vertices: u32,
@@ -483,56 +577,74 @@ impl Shape {
 
 #[derive(Debug, Clone)]
 pub enum Segment {
-    Line { end: Vector2<f64> },
-    ClockwiseCurve { end: Vector2<f64>, diameter: f64 },
-    CounterClockwiseCurve { end: Vector2<f64>, diameter: f64 },
+    Line {
+        end: Vector2<f64>,
+    },
+    ClockwiseCurve {
+        end: Vector2<f64>,
+        center: Vector2<f64>,
+    },
+    CounterClockwiseCurve {
+        end: Vector2<f64>,
+        center: Vector2<f64>,
+    },
 }
 
 impl Segment {
-    fn debug_render(&self) -> Box<dyn Command> {
+    fn debug_render(&self, start: Vector2<f64>) -> Box<dyn Command> {
         match self {
             Segment::Line { end } => Box::new(LineTo {
                 point: (end.x, end.y),
                 option: LineToOption::Default,
                 coordinate_type: CoordinateType::Absolute,
             }),
-            Segment::ClockwiseCurve { end, diameter } => Box::new(SvgArc {
-                radius: (*diameter / 2.0, *diameter / 2.0),
-                x_axis_rotation: 0.0,
-                large_arc_flag: false,
-                sweep_flag: false, // Clockwise
-                point: (end.x, end.y),
-                coordinate_type: CoordinateType::Absolute,
-            }),
-            Segment::CounterClockwiseCurve { end, diameter } => Box::new(SvgArc {
-                radius: (*diameter / 2.0, *diameter / 2.0),
-                x_axis_rotation: 0.0,
-                large_arc_flag: false,
-                sweep_flag: true, // CounterClockwise
-                point: (end.x, end.y),
-                coordinate_type: CoordinateType::Absolute,
-            }),
+            Segment::ClockwiseCurve { end, center } => {
+                let diameter = (end - center).norm();
+                Box::new(SvgArc {
+                    radius: (diameter / 2.0, diameter / 2.0),
+                    x_axis_rotation: 0.0,
+                    large_arc_flag: *end == start,
+                    sweep_flag: *end == start, // Clockwise
+                    point: (end.x, end.y),
+                    coordinate_type: CoordinateType::Absolute,
+                })
+            }
+            Segment::CounterClockwiseCurve { end, center } => {
+                let diameter = (end - center).norm();
+                Box::new(SvgArc {
+                    radius: (diameter / 2.0, diameter / 2.0),
+                    x_axis_rotation: 0.0,
+                    large_arc_flag: *end == start,
+                    sweep_flag: *end != start, // CounterClockwise
+                    point: (end.x, end.y),
+                    coordinate_type: CoordinateType::Absolute,
+                })
+            }
         }
     }
 
     fn calculate_bounds(&self) -> (f64, f64, f64, f64) {
         match self {
             Segment::Line { end } => (end.x, end.y, end.x, end.y),
-            Segment::ClockwiseCurve { end, diameter }
-            | Segment::CounterClockwiseCurve { end, diameter } => (
-                end.x - diameter * 2.0,
-                end.y - diameter * 2.0,
-                end.x + diameter * 2.0,
-                end.y + diameter * 2.0,
-            ),
+            Segment::ClockwiseCurve { end, center }
+            | Segment::CounterClockwiseCurve { end, center } => {
+                let diameter = (end - center).norm();
+                let radius = diameter / 2.0;
+                (
+                    end.x - radius,
+                    end.y - radius,
+                    end.x + radius,
+                    end.y + radius,
+                )
+            }
         }
     }
 
     fn end(&self) -> Vector2<f64> {
         match self {
             Segment::Line { end } => *end,
-            Segment::ClockwiseCurve { end, diameter: _ } => *end,
-            Segment::CounterClockwiseCurve { end, diameter: _ } => *end,
+            Segment::ClockwiseCurve { end, center: _ } => *end,
+            Segment::CounterClockwiseCurve { end, center: _ } => *end,
         }
     }
 
@@ -542,50 +654,32 @@ impl Segment {
         start: Vector2<f64>,
         points: &mut Vec<Coord<f64>>,
     ) {
-        enum ArchDirection {
-            Clockwise,
-            CounterClockwise,
-        }
-
         fn arc_to_cords(
             distance_per_step: f64,
             start: Vector2<f64>,
             end: Vector2<f64>,
-            diameter: f64,
+            center: Vector2<f64>,
             direction: ArchDirection,
             points: &mut Vec<Coord<f64>>,
         ) {
-            let radius = diameter / 2.0;
-            let chord = end - start;
-            let chord_length = chord.norm();
-            let chord_direction = chord.normalize();
-            let chord_middle = start + (chord_length / 2.0) * chord_direction;
-            let center_direction = Vector2::new(chord_direction.y, -chord_direction.x);
-            let apothem = (radius.powi(2) - (chord_length.powi(2) / 4.0))
-                .max(0.0)
-                .sqrt();
-            let center = if matches!(direction, ArchDirection::Clockwise) {
-                chord_middle + center_direction * apothem
-            } else {
-                chord_middle - center_direction * apothem
-            };
-
             let center_to_start = start - center;
             let center_to_end = end - center;
 
             let dot_product = center_to_start.dot(&center_to_end);
 
-            let starting_radius = center_to_start.norm();
-            let ending_radius = center_to_end.norm();
-            let radius_delta = ending_radius - starting_radius;
+            let radius = center_to_start.norm();
 
-            let angle = (dot_product / (starting_radius * ending_radius))
-                .clamp(-1.0, 1.0)
-                .acos();
+            let angle = (dot_product / radius.powi(2)).clamp(-1.0, 1.0).acos();
+            let angle = if angle == 0.0 {
+                // That means this is actually a circle and we need to make a full rotation.
+                std::f64::consts::PI * 2.0
+            } else {
+                angle
+            };
 
             let starting_angle = (start.y - center.y).atan2(start.x - center.x);
 
-            let arch_length = angle * starting_radius.max(ending_radius);
+            let arch_length = angle * radius;
             let steps = (arch_length / distance_per_step).ceil();
 
             let angle_direction = if matches!(direction, ArchDirection::Clockwise) {
@@ -595,18 +689,17 @@ impl Segment {
             };
 
             let angle_step = (angle / steps) * angle_direction;
-            let radius_step = radius_delta / steps;
 
             let steps = steps as usize;
 
             for step_index in 0..steps {
                 let angle = starting_angle + angle_step * step_index as f64;
-                let radius = starting_radius + radius_step * step_index as f64;
 
                 let (sin, cos) = angle.sin_cos();
                 let offset = Vector2::new(cos, sin) * radius;
 
                 let new_position = center + offset;
+
                 points.push(Coord {
                     x: new_position.x,
                     y: new_position.y,
@@ -620,22 +713,28 @@ impl Segment {
             Segment::Line { end } => {
                 points.push(Coord { x: end.x, y: end.y });
             }
-            Segment::ClockwiseCurve { end, diameter } => arc_to_cords(
+            Segment::ClockwiseCurve { end, center } => arc_to_cords(
                 distance_per_step,
                 start,
                 *end,
-                *diameter,
+                *center,
                 ArchDirection::Clockwise,
                 points,
             ),
-            Segment::CounterClockwiseCurve { end, diameter } => arc_to_cords(
+            Segment::CounterClockwiseCurve { end, center } => arc_to_cords(
                 distance_per_step,
                 start,
                 *end,
-                *diameter,
+                *center,
                 ArchDirection::CounterClockwise,
                 points,
             ),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ArchDirection {
+    Clockwise,
+    CounterClockwise,
 }

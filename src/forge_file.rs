@@ -42,6 +42,9 @@ pub enum Stage {
         machine_config: Option<Utf8PathBuf>,
         gcode_file: PathBuf,
         gerber_file: PathBuf,
+
+        #[serde(default)]
+        backside: bool,
     },
     #[serde(rename = "cut_board")]
     CutBoard {
@@ -50,6 +53,9 @@ pub enum Stage {
 
         #[serde(flatten)]
         file: CutBoardFile,
+
+        #[serde(default)]
+        backside: bool,
     },
 }
 

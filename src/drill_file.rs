@@ -10,7 +10,7 @@ use uom::si::{
 
 use crate::{
     config::machine::JobConfig,
-    gcode_generation::{CurveType, GCommand, MovementType, ToolSelection},
+    gcode_generation::{GCommand, MovementType, ToolSelection},
     geometry::Shape,
     parsing::{
         self,

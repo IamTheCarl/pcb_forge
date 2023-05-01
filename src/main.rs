@@ -23,9 +23,8 @@ mod parsing;
 use crate::{
     config::machine::Tool,
     forge_file::ForgeFile,
-    gcode_generation::{GCodeFile, ToolSelection},
+    gcode_generation::{BoardSide, GCodeFile, ToolSelection},
     gerber_file::GerberFile,
-    parsing::drill,
 };
 mod forge_file;
 
@@ -90,10 +89,17 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 machine_config,
                 gerber_file,
                 gcode_file,
+                backside,
             } => {
                 log::info!("Process engrave stage: {:?}", gerber_file);
 
-                let gcode = gcode_files.entry(gcode_file.clone()).or_default();
+                let gcode: &mut Vec<GCommand> = gcode_files.entry(gcode_file.clone()).or_default();
+
+                gcode.push(GCommand::SetSide(if *backside {
+                    BoardSide::Back
+                } else {
+                    BoardSide::Front
+                }));
 
                 let machine_config_path = machine_config
                     .as_ref()
@@ -140,10 +146,17 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                 machine_config,
                 gcode_file,
                 file,
+                backside,
             } => {
                 log::info!("Process cutting stage: {}", file);
 
                 let gcode = gcode_files.entry(gcode_file.clone()).or_default();
+
+                gcode.push(GCommand::SetSide(if *backside {
+                    BoardSide::Back
+                } else {
+                    BoardSide::Front
+                }));
 
                 let machine_config_path = machine_config
                     .as_ref()

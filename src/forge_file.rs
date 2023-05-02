@@ -69,19 +69,44 @@ pub enum Stage {
     },
 }
 
+#[derive(Debug, Deserialize, Clone, Copy)]
+pub enum LineSelection {
+    #[serde(rename = "all")]
+    All,
+    #[serde(rename = "inner")]
+    Inner,
+    #[serde(rename = "outer")]
+    Outer,
+}
+
+impl Default for LineSelection {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
 pub enum CutBoardFile {
-    #[serde(rename = "gerber_file")]
-    Gerber(PathBuf),
-    #[serde(rename = "drill_file")]
-    Drill(PathBuf),
+    Gerber {
+        gerber_file: PathBuf,
+
+        #[serde(default)]
+        select_lines: LineSelection,
+    },
+    Drill {
+        drill_file: PathBuf,
+    },
 }
 
 impl Display for CutBoardFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CutBoardFile::Gerber(file_path) => write!(f, "gerber file: {:?}", file_path),
-            CutBoardFile::Drill(file_path) => write!(f, "drill file: {:?}", file_path),
+            CutBoardFile::Gerber {
+                gerber_file,
+                select_lines: _,
+            } => write!(f, "gerber file: {:?}", gerber_file),
+            CutBoardFile::Drill { drill_file } => write!(f, "drill file: {:?}", drill_file),
         }
     }
 }

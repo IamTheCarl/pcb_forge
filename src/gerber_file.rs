@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use geo::{BooleanOps, BoundingRect, Contains, Coord, MultiPolygon};
+use geo::{BooleanOps, BoundingRect, Contains, Coord, MultiPolygon, Polygon};
 use geo_offset::Offset;
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use progress_bar::*;
@@ -20,6 +20,7 @@ use uom::si::{
 
 use crate::{
     config::machine::JobConfig,
+    forge_file::LineSelection,
     gcode_generation::{GCommand, MovementType, ToolSelection},
     geometry::{ArchDirection, Segment, Shape, ShapeConfiguration},
     parsing::{
@@ -50,6 +51,7 @@ impl GerberFile {
         job_config: &JobConfig,
         tool_config: &ToolSelection,
         generate_infill: bool,
+        line_selection: LineSelection,
         invert: bool,
     ) -> Result<()> {
         log::info!("Simplifying geometry.");
@@ -69,6 +71,29 @@ impl GerberFile {
                 previous.union(&polygon)
             });
         // let polygon = MultiPolygon::new(polygon);
+
+        let polygon = match line_selection {
+            LineSelection::All => polygon,
+            LineSelection::Inner => MultiPolygon::new(
+                polygon
+                    .0
+                    .into_iter()
+                    .flat_map(|polygon| {
+                        polygon
+                            .interiors()
+                            .iter()
+                            .cloned()
+                            .map(|interior| Polygon::new(interior, vec![]))
+                            .collect::<Vec<Polygon>>()
+                    })
+                    .collect(),
+            ),
+            LineSelection::Outer => polygon
+                .0
+                .into_iter()
+                .map(|polygon| Polygon::new(polygon.exterior().clone(), vec![]))
+                .collect(),
+        };
 
         // Apply offsets from laser.
         let polygon = if invert {

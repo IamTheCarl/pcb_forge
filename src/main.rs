@@ -13,6 +13,7 @@ use config::{
     machine::{JobConfig, Machine},
     Config,
 };
+use forge_file::LineSelection;
 use gcode_generation::GCommand;
 use uom::si::length::{millimeter, Length};
 mod drill_file;
@@ -145,6 +146,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     gerber_file: gerber_file.as_ref(),
                     debug_output_directory: debug_output_directory.as_ref(),
                     generate_infill: true,
+                    select_lines: LineSelection::All,
                     gcode,
                     min_x: &mut min_x,
                     max_x: &mut max_x,
@@ -198,7 +200,10 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     .context("Failed to find machine profile.")?;
 
                 match file {
-                    forge_file::CutBoardFile::Gerber(gerber_file) => {
+                    forge_file::CutBoardFile::Gerber {
+                        gerber_file,
+                        select_lines,
+                    } => {
                         process_gerber_file(GerberConfig {
                             build_configuration: &build_configuration,
                             machine_config,
@@ -207,12 +212,13 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                             gerber_file: gerber_file.as_ref(),
                             debug_output_directory: debug_output_directory.as_ref(),
                             generate_infill: false,
+                            select_lines: *select_lines,
                             gcode,
                             min_x: &mut min_x,
                             max_x: &mut max_x,
                         })?;
                     }
-                    forge_file::CutBoardFile::Drill(drill_file) => {
+                    forge_file::CutBoardFile::Drill { drill_file } => {
                         let file_path = build_configuration
                             .forge_file_path
                             .parent()
@@ -260,6 +266,7 @@ struct GerberConfig<'a> {
     gerber_file: &'a Path,
     debug_output_directory: Option<&'a PathBuf>,
     generate_infill: bool,
+    select_lines: LineSelection,
     gcode: &'a mut Vec<GCommand>,
     min_x: &'a mut f64,
     max_x: &'a mut f64,
@@ -342,6 +349,7 @@ fn process_gerber_file(config: GerberConfig) -> Result<()> {
             config.job_config,
             &tool_selection,
             config.generate_infill,
+            config.select_lines,
             config.invert,
         )
         .context("Failed to generate GCode file.")?;

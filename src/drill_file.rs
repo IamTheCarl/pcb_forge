@@ -150,8 +150,6 @@ impl DrillHole {
         //     ),
         // });
 
-        let center_to_start = starting_point;
-
         let arch_length = std::f64::consts::PI * 2.0 * inner_radius;
         let steps = (arch_length / distance_per_step).ceil();
 

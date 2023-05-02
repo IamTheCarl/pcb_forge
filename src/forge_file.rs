@@ -16,6 +16,9 @@ pub struct ForgeFile {
     pub project_name: String,
     pub board_version: Version,
 
+    #[serde(default = "ForgeFile::align_backside_default")]
+    pub align_backside: bool,
+
     #[serde(deserialize_with = "parse_quantity")]
     pub board_thickness: Length<uom::si::SI<f64>, f64>,
 
@@ -32,6 +35,10 @@ impl ForgeFile {
         let forge: Self = serde_yaml::from_str(&forge).context("Failed to decode forge file.")?;
 
         Ok(forge)
+    }
+
+    fn align_backside_default() -> bool {
+        true
     }
 }
 

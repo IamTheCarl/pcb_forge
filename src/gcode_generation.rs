@@ -58,9 +58,14 @@ pub struct GCodeFile {
 }
 
 impl GCodeFile {
-    pub fn to_string(&self) -> Result<String> {
+    pub fn to_string(&self, x_offset: Length<uom::si::SI<f64>, f64>) -> Result<String> {
         let mut unit_mode = UnitMode::Metric;
         let mut board_side = BoardSide::Front;
+
+        let x_offset = match unit_mode {
+            UnitMode::Metric => x_offset.get::<millimeter>(),
+            UnitMode::Imperial => x_offset.get::<mil>(),
+        };
 
         let mut max_power = None;
 
@@ -115,7 +120,7 @@ impl GCodeFile {
 
                     let x = match board_side {
                         BoardSide::Front => x,
-                        BoardSide::Back => -x,
+                        BoardSide::Back => -x + x_offset,
                     };
 
                     match movement {
@@ -132,7 +137,7 @@ impl GCodeFile {
 
                     let x = match board_side {
                         BoardSide::Front => x,
-                        BoardSide::Back => -x,
+                        BoardSide::Back => -x + x_offset,
                     };
 
                     writeln!(&mut output, "G0 X{} Y{}", x, y)

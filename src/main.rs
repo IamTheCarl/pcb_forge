@@ -14,6 +14,7 @@ use config::{
     Config,
 };
 use gcode_generation::GCommand;
+use uom::si::length::{millimeter, Length};
 mod drill_file;
 mod gcode_generation;
 mod geometry;
@@ -67,6 +68,9 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
         .context("Failed to load forge file.")?;
 
     let mut gcode_files = HashMap::new();
+
+    let mut min_x = f64::INFINITY;
+    let mut max_x = -f64::INFINITY;
 
     for (stage_index, stage) in forge_file.stages.iter().enumerate() {
         let debug_output_directory = if build_configuration.debug {
@@ -142,6 +146,8 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     debug_output_directory: debug_output_directory.as_ref(),
                     generate_infill: true,
                     gcode,
+                    min_x: &mut min_x,
+                    max_x: &mut max_x,
                 })?;
             }
             forge_file::Stage::CutBoard {
@@ -202,6 +208,8 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                             debug_output_directory: debug_output_directory.as_ref(),
                             generate_infill: false,
                             gcode,
+                            min_x: &mut min_x,
+                            max_x: &mut max_x,
                         })?;
                     }
                     forge_file::CutBoardFile::Drill(drill_file) => {
@@ -226,11 +234,17 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
         }
     }
 
+    let backside_offset = if forge_file.align_backside {
+        max_x - min_x
+    } else {
+        0.0
+    };
+
     for (path, commands) in gcode_files {
         let output_file = build_configuration.target_directory.join(&path);
         let gcode_file = GCodeFile::new(commands);
         let output = gcode_file
-            .to_string()
+            .to_string(Length::new::<millimeter>(backside_offset))
             .with_context(|| format!("Failed to produce GCode for file: {:?}", path))?;
         fs::write(output_file, output).context("Failed to save GCode file.")?;
     }
@@ -247,6 +261,8 @@ struct GerberConfig<'a> {
     debug_output_directory: Option<&'a PathBuf>,
     generate_infill: bool,
     gcode: &'a mut Vec<GCommand>,
+    min_x: &'a mut f64,
+    max_x: &'a mut f64,
 }
 
 fn process_gerber_file(config: GerberConfig) -> Result<()> {
@@ -314,6 +330,11 @@ fn process_gerber_file(config: GerberConfig) -> Result<()> {
         fs::write(output_file, document.render())
             .context("Failed to save gerber debug SVG file.")?;
     }
+
+    let (min_x, _min_y, max_x, _max_y) = gerber.calculate_bounds();
+
+    *config.min_x = config.min_x.min(min_x);
+    *config.max_x = config.max_x.max(max_x);
 
     gerber
         .generate_gcode(

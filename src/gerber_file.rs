@@ -333,7 +333,7 @@ impl GerberFile {
         Ok(())
     }
 
-    fn calculate_bounds(&self) -> (f64, f64, f64, f64) {
+    pub fn calculate_bounds(&self) -> (f64, f64, f64, f64) {
         if !self.shapes.is_empty() {
             let mut min_x = f64::MAX;
             let mut min_y = f64::MAX;

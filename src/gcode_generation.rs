@@ -13,7 +13,7 @@ use uom::si::{
 };
 
 use crate::{
-    config::machine::{LaserConfig, SpindleBit, SpindleConfig},
+    config::machine::{JobConfig, LaserConfig, Machine, SpindleBit, SpindleConfig},
     parsing::UnitMode,
 };
 
@@ -23,7 +23,6 @@ pub enum GCommand {
         max_power: Power<uom::si::SI<f64>, f64>,
     },
     RemoveTool,
-    AbsoluteMode,
     SetRapidTransverseSpeed(Velocity<uom::si::SI<f64>, f64>),
     SetWorkSpeed(Velocity<uom::si::SI<f64>, f64>),
     SetPower(Power<uom::si::SI<f64>, f64>),
@@ -71,6 +70,9 @@ impl GCodeFile {
 
         let mut output = String::default();
 
+        // Put the machine into absolute mode.
+        writeln!(&mut output, "G90")?;
+
         for command in self.commands.iter() {
             match command {
                 GCommand::EquipLaser {
@@ -83,7 +85,6 @@ impl GCodeFile {
                     max_power = None;
                     Ok(())
                 }
-                GCommand::AbsoluteMode => writeln!(&mut output, "G90"),
                 GCommand::SetRapidTransverseSpeed(speed) => writeln!(
                     &mut output,
                     "G0 F{}",
@@ -194,4 +195,11 @@ impl<'a> ToolSelection<'a> {
             },
         }
     }
+}
+
+pub struct GCodeConfig<'a> {
+    pub commands: &'a mut Vec<GCommand>,
+    pub job_config: &'a JobConfig,
+    pub tool_config: &'a ToolSelection<'a>,
+    pub machine_config: &'a Machine,
 }

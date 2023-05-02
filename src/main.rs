@@ -25,7 +25,7 @@ mod parsing;
 use crate::{
     config::machine::Tool,
     forge_file::ForgeFile,
-    gcode_generation::{BoardSide, GCodeFile, ToolSelection},
+    gcode_generation::{BoardSide, GCodeConfig, GCodeFile, ToolSelection},
     gerber_file::GerberFile,
 };
 mod forge_file;
@@ -232,7 +232,12 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                         let tool_selection = get_tool_selection(machine_config, &job_config.tool)?;
 
                         drill_file
-                            .generate_gcode(gcode, job_config, &tool_selection)
+                            .generate_gcode(GCodeConfig {
+                                commands: gcode,
+                                job_config,
+                                tool_config: &tool_selection,
+                                machine_config,
+                            })
                             .context("Failed to generate gcode file.")?;
                     }
                 }
@@ -345,9 +350,12 @@ fn process_gerber_file(config: GerberConfig) -> Result<()> {
 
     gerber
         .generate_gcode(
-            config.gcode,
-            config.job_config,
-            &tool_selection,
+            GCodeConfig {
+                commands: config.gcode,
+                job_config: config.job_config,
+                tool_config: &tool_selection,
+                machine_config: config.machine_config,
+            },
             config.generate_infill,
             config.select_lines,
             config.invert,

@@ -5,12 +5,10 @@ use nalgebra::Vector2;
 use uom::si::{
     length::{inch, millimeter, Length},
     ratio::{percent, Ratio},
-    velocity::{millimeter_per_second, Velocity},
 };
 
 use crate::{
-    config::machine::JobConfig,
-    gcode_generation::{GCommand, MovementType, ToolSelection},
+    gcode_generation::{GCodeConfig, GCommand, MovementType, ToolSelection},
     geometry::Shape,
     parsing::{
         self,
@@ -26,32 +24,22 @@ pub struct DrillFile {
 }
 
 impl DrillFile {
-    pub fn generate_gcode(
-        &self,
-        commands: &mut Vec<GCommand>,
-        job_config: &JobConfig,
-        tool_config: &ToolSelection,
-    ) -> Result<()> {
-        match job_config.tool_power {
+    pub fn generate_gcode(&self, config: GCodeConfig) -> Result<()> {
+        match config.job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
                 laser_power,
                 work_speed,
             } => {
-                let distance_per_step = job_config.distance_per_step.get::<millimeter>();
+                let distance_per_step = config.job_config.distance_per_step.get::<millimeter>();
 
-                if let ToolSelection::Laser { laser } = tool_config {
-                    commands.extend(
+                if let ToolSelection::Laser { laser } = config.tool_config {
+                    config.commands.extend(
                         [
                             GCommand::EquipLaser {
                                 max_power: laser.max_power,
                             },
-                            GCommand::AbsoluteMode,
                             GCommand::UnitMode(UnitMode::Metric),
-                            GCommand::SetRapidTransverseSpeed(
-                                Velocity::new::<millimeter_per_second>(
-                                    3000.0, // TODO this should come from the config file.
-                                ),
-                            ),
+                            GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
                             GCommand::SetPower(laser_power),
                             GCommand::SetFanPower {
@@ -82,15 +70,15 @@ impl DrillFile {
 
                         hole.generate_gcode(
                             distance_per_step,
-                            commands,
-                            tool_config.diameter().get::<millimeter>(),
+                            config.commands,
+                            config.tool_config.diameter().get::<millimeter>(),
                         );
                         last_position = hole.position;
                     }
 
                     // TODO render paths.
 
-                    commands.push(GCommand::RemoveTool);
+                    config.commands.push(GCommand::RemoveTool);
 
                     Ok(())
                 } else {
@@ -130,7 +118,6 @@ impl DrillHole {
         let inner_radius = inner_diameter / 2.0;
 
         let starting_point = self.position + Vector2::new(inner_radius, 0.0);
-        let intermediate_point = self.position - Vector2::new(inner_radius, 0.0);
 
         commands.push(GCommand::MoveTo {
             target: (
@@ -138,17 +125,6 @@ impl DrillHole {
                 Length::new::<millimeter>(starting_point.y),
             ),
         });
-        // Works right on simulators, works wrong on actual machine.
-        // commands.push(GCommand::Cut {
-        //     movement: MovementType::ClockwiseCurve(CurveType::Center(
-        //         Length::new::<millimeter>(self.position.x),
-        //         Length::new::<millimeter>(self.position.y),
-        //     )),
-        //     target: (
-        //         Length::new::<millimeter>(starting_point.x),
-        //         Length::new::<millimeter>(starting_point.y),
-        //     ),
-        // });
 
         let arch_length = std::f64::consts::PI * 2.0 * inner_radius;
         let steps = (arch_length / distance_per_step).ceil();

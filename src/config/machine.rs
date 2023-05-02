@@ -16,6 +16,10 @@ use crate::parsing::parse_quantity;
 pub struct Machine {
     pub tools: HashMap<String, Tool>,
 
+    /// The absolute max speed the machine can jog at.
+    #[serde(deserialize_with = "parse_quantity")]
+    pub jog_speed: Velocity<uom::si::SI<f64>, f64>,
+
     /// Configurations for materials and tools that can be used for engraving.
     pub engraving_configs: HashMap<String, JobConfig>,
 

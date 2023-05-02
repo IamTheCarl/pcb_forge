@@ -19,9 +19,8 @@ use uom::si::{
 };
 
 use crate::{
-    config::machine::JobConfig,
     forge_file::LineSelection,
-    gcode_generation::{GCommand, MovementType, ToolSelection},
+    gcode_generation::{GCodeConfig, GCommand, MovementType, ToolSelection},
     geometry::{ArchDirection, Segment, Shape, ShapeConfiguration},
     parsing::{
         gerber::{
@@ -47,15 +46,13 @@ impl GerberFile {
 
     pub fn generate_gcode(
         &self,
-        commands: &mut Vec<GCommand>,
-        job_config: &JobConfig,
-        tool_config: &ToolSelection,
+        config: GCodeConfig,
         generate_infill: bool,
         line_selection: LineSelection,
         invert: bool,
     ) -> Result<()> {
         log::info!("Simplifying geometry.");
-        let distance_per_step = job_config.distance_per_step.get::<millimeter>();
+        let distance_per_step = config.job_config.distance_per_step.get::<millimeter>();
 
         let mut polygon = Vec::new();
 
@@ -101,22 +98,21 @@ impl GerberFile {
             polygon
         } else {
             polygon
-                .offset(tool_config.diameter().get::<millimeter>() / 2.0)
+                .offset(config.tool_config.diameter().get::<millimeter>() / 2.0)
                 .map_err(|error| anyhow!("Failed to apply beam offset: {:?}", error))?
         };
 
-        match job_config.tool_power {
+        match config.job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
                 laser_power,
                 work_speed,
             } => {
-                if let ToolSelection::Laser { laser } = tool_config {
-                    commands.extend(
+                if let ToolSelection::Laser { laser } = config.tool_config {
+                    config.commands.extend(
                         [
                             GCommand::EquipLaser {
                                 max_power: laser.max_power,
                             },
-                            GCommand::AbsoluteMode,
                             GCommand::UnitMode(UnitMode::Metric),
                             GCommand::SetRapidTransverseSpeed(
                                 Velocity::new::<millimeter_per_second>(
@@ -163,10 +159,10 @@ impl GerberFile {
                     {
                         let polygon = &polygon.0;
                         for polygon in polygon.iter() {
-                            add_point_string(commands, polygon.exterior().0.iter());
+                            add_point_string(config.commands, polygon.exterior().0.iter());
 
                             for interior in polygon.interiors() {
-                                add_point_string(commands, interior.0.iter());
+                                add_point_string(config.commands, interior.0.iter());
                             }
                         }
                     }
@@ -179,8 +175,10 @@ impl GerberFile {
                             .context("Could not compute bounds for PCB.")?;
 
                         let (min_x, min_y, max_x, max_y) = (
-                            bounds.min().x + (tool_config.diameter() / 2.0).get::<millimeter>(),
-                            bounds.min().y + (tool_config.diameter() / 2.0).get::<millimeter>(),
+                            bounds.min().x
+                                + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
+                            bounds.min().y
+                                + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
                             bounds.max().x,
                             bounds.max().y,
                         );
@@ -191,8 +189,9 @@ impl GerberFile {
                         }
 
                         init_progress_bar(
-                            ((max_y - min_y) / (tool_config.diameter() / 2.0).get::<millimeter>())
-                                .ceil() as usize,
+                            ((max_y - min_y)
+                                / (config.tool_config.diameter() / 2.0).get::<millimeter>())
+                            .ceil() as usize,
                         );
                         set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
 
@@ -221,10 +220,10 @@ impl GerberFile {
                                     });
                                 }
 
-                                x += (tool_config.diameter() / 2.0).get::<millimeter>();
+                                x += (config.tool_config.diameter() / 2.0).get::<millimeter>();
                             }
 
-                            y += (tool_config.diameter() / 2.0).get::<millimeter>();
+                            y += (config.tool_config.diameter() / 2.0).get::<millimeter>();
                             // println!("{}", (y - min_y) / (max_y - min_y));
                             inc_progress_bar();
                         }
@@ -264,13 +263,13 @@ impl GerberFile {
                                 LineSelection::Start(index) => {
                                     let line = lines.remove(index);
 
-                                    commands.push(GCommand::MoveTo {
+                                    config.commands.push(GCommand::MoveTo {
                                         target: (
                                             Length::new::<millimeter>(line.start.x),
                                             Length::new::<millimeter>(line.start.y),
                                         ),
                                     });
-                                    commands.push(GCommand::Cut {
+                                    config.commands.push(GCommand::Cut {
                                         movement: MovementType::Linear,
                                         target: (
                                             Length::new::<millimeter>(line.end.x),
@@ -283,13 +282,13 @@ impl GerberFile {
                                 LineSelection::End(index) => {
                                     let line = lines.remove(index);
 
-                                    commands.push(GCommand::MoveTo {
+                                    config.commands.push(GCommand::MoveTo {
                                         target: (
                                             Length::new::<millimeter>(line.end.x),
                                             Length::new::<millimeter>(line.end.y),
                                         ),
                                     });
-                                    commands.push(GCommand::Cut {
+                                    config.commands.push(GCommand::Cut {
                                         movement: MovementType::Linear,
                                         target: (
                                             Length::new::<millimeter>(line.start.x),
@@ -307,7 +306,7 @@ impl GerberFile {
                         finalize_progress_bar();
                     }
 
-                    commands.push(GCommand::RemoveTool);
+                    config.commands.push(GCommand::RemoveTool);
 
                     Ok(())
                 } else {

@@ -8,7 +8,7 @@ use uom::si::{
 };
 
 use crate::{
-    gcode_generation::{GCodeConfig, GCommand, MovementType, ToolSelection},
+    gcode_generation::{GCodeConfig, GCommand, MovementType, Tool, ToolSelection},
     geometry::Shape,
     parsing::{
         self,
@@ -30,14 +30,12 @@ impl DrillFile {
                 laser_power,
                 work_speed,
             } => {
-                let distance_per_step = config.job_config.distance_per_step.get::<millimeter>();
-
                 if let ToolSelection::Laser { laser } = config.tool_config {
                     config.commands.extend(
                         [
-                            GCommand::EquipLaser {
+                            GCommand::EquipTool(Tool::Laser {
                                 max_power: laser.max_power,
-                            },
+                            }),
                             GCommand::UnitMode(UnitMode::Metric),
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
@@ -50,52 +48,74 @@ impl DrillFile {
                         .iter()
                         .cloned(),
                     );
-
-                    let mut holes = self.holes.clone();
-                    let mut last_position = Vector2::new(0.0, 0.0);
-
-                    while !holes.is_empty() {
-                        let mut last_distance = f64::INFINITY;
-                        let mut hole_selection = 0;
-
-                        for (hole_index, hole) in holes.iter().enumerate() {
-                            let distance_to_hole = (hole.position - last_position).norm();
-                            if distance_to_hole < last_distance {
-                                last_distance = distance_to_hole;
-                                hole_selection = hole_index;
-                            }
-                        }
-
-                        let hole = holes.remove(hole_selection);
-
-                        hole.generate_gcode(
-                            distance_per_step,
-                            config.commands,
-                            config.tool_config.diameter().get::<millimeter>(),
-                        );
-                        last_position = hole.position;
-                    }
-
-                    // TODO render paths.
-
-                    config.commands.push(GCommand::RemoveTool);
-
-                    Ok(())
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }
             }
-            crate::config::machine::ToolConfig::Drill {
-                spindle_rpm,
-                plunge_speed,
-            } => bail!("drilling drill files is not yet supported"),
             crate::config::machine::ToolConfig::EndMill {
-                spindle_rpm,
+                spindle_speed: spindle_rpm,
                 max_cut_depth,
                 plunge_speed,
                 work_speed,
-            } => bail!("milling drill files is not yet supported"),
+            } => {
+                if let ToolSelection::Spindle { spindle, bit: _ } = config.tool_config {
+                    config.commands.extend(
+                        [
+                            GCommand::EquipTool(Tool::Spindle {
+                                max_spindle_speed: spindle.max_speed,
+                                plunge_speed,
+                                plunge_depth: max_cut_depth,
+                            }),
+                            GCommand::UnitMode(UnitMode::Metric),
+                            GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
+                            GCommand::SetWorkSpeed(work_speed),
+                            GCommand::SetSpindleSpeed(spindle_rpm),
+                            GCommand::SetFanPower {
+                                index: 0,
+                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                            },
+                        ]
+                        .iter()
+                        .cloned(),
+                    );
+                } else {
+                    bail!("Job was configured for a laser but selected tool is not a laser.");
+                }
+            }
         }
+
+        let distance_per_step = config.job_config.distance_per_step.get::<millimeter>();
+
+        let mut holes = self.holes.clone();
+        let mut last_position = Vector2::new(0.0, 0.0);
+
+        while !holes.is_empty() {
+            let mut last_distance = f64::INFINITY;
+            let mut hole_selection = 0;
+
+            for (hole_index, hole) in holes.iter().enumerate() {
+                let distance_to_hole = (hole.position - last_position).norm();
+                if distance_to_hole < last_distance {
+                    last_distance = distance_to_hole;
+                    hole_selection = hole_index;
+                }
+            }
+
+            let hole = holes.remove(hole_selection);
+
+            hole.generate_gcode(
+                distance_per_step,
+                config.commands,
+                config.tool_config.diameter().get::<millimeter>(),
+            );
+            last_position = hole.position;
+        }
+
+        // TODO render paths.
+
+        config.commands.push(GCommand::EquipTool(Tool::None));
+
+        Ok(())
     }
 }
 

@@ -20,7 +20,7 @@ use uom::si::{
 
 use crate::{
     forge_file::LineSelection,
-    gcode_generation::{GCodeConfig, GCommand, MovementType, ToolSelection},
+    gcode_generation::{GCodeConfig, GCommand, MovementType, Tool, ToolSelection},
     geometry::{ArchDirection, Segment, Shape, ShapeConfiguration},
     parsing::{
         gerber::{
@@ -110,15 +110,11 @@ impl GerberFile {
                 if let ToolSelection::Laser { laser } = config.tool_config {
                     config.commands.extend(
                         [
-                            GCommand::EquipLaser {
+                            GCommand::EquipTool(Tool::Laser {
                                 max_power: laser.max_power,
-                            },
+                            }),
                             GCommand::UnitMode(UnitMode::Metric),
-                            GCommand::SetRapidTransverseSpeed(
-                                Velocity::new::<millimeter_per_second>(
-                                    3000.0, // TODO this should come from the config file.
-                                ),
-                            ),
+                            GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
                             GCommand::SetPower(laser_power),
                             GCommand::SetFanPower {
@@ -129,201 +125,217 @@ impl GerberFile {
                         .iter()
                         .cloned(),
                     );
-
-                    // Start by generating GCode for the outlines.
-
-                    fn add_point_string<'a>(
-                        commands: &mut Vec<GCommand>,
-                        mut point_iter: impl Iterator<Item = &'a Coord<f64>>,
-                    ) {
-                        if let Some(first_point) = point_iter.next() {
-                            commands.push(GCommand::MoveTo {
-                                target: (
-                                    Length::new::<millimeter>(first_point.x),
-                                    Length::new::<millimeter>(first_point.y),
-                                ),
-                            })
-                        }
-
-                        for point in point_iter {
-                            commands.push(GCommand::Cut {
-                                movement: MovementType::Linear,
-                                target: (
-                                    Length::new::<millimeter>(point.x),
-                                    Length::new::<millimeter>(point.y),
-                                ),
-                            })
-                        }
-                    }
-
-                    {
-                        let polygon = &polygon.0;
-                        for polygon in polygon.iter() {
-                            add_point_string(config.commands, polygon.exterior().0.iter());
-
-                            for interior in polygon.interiors() {
-                                add_point_string(config.commands, interior.0.iter());
-                            }
-                        }
-                    }
-
-                    if generate_infill {
-                        // Now we generate the infill.
-                        log::info!("Generating infill.");
-                        let bounds = polygon
-                            .bounding_rect()
-                            .context("Could not compute bounds for PCB.")?;
-
-                        let (min_x, min_y, max_x, max_y) = (
-                            bounds.min().x
-                                + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
-                            bounds.min().y
-                                + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
-                            bounds.max().x,
-                            bounds.max().y,
-                        );
-
-                        struct InfillLine {
-                            start: Vector2<f64>,
-                            end: Vector2<f64>,
-                        }
-
-                        init_progress_bar(
-                            ((max_y - min_y)
-                                / (config.tool_config.diameter() / 2.0).get::<millimeter>())
-                            .ceil() as usize,
-                        );
-                        set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
-
-                        let mut lines = Vec::new();
-
-                        let mut y = min_y;
-                        while y < max_y {
-                            let mut x = min_x;
-                            let mut start = None;
-                            let mut end = None;
-
-                            while x < max_x {
-                                let point = Coord { x, y };
-
-                                if !polygon.contains(&point) ^ invert {
-                                    if start.is_none() {
-                                        start = Some(x);
-                                    }
-
-                                    end = Some(x);
-                                } else if let (Some(start), Some(end)) = (start.take(), end.take())
-                                {
-                                    lines.push(InfillLine {
-                                        start: Vector2::new(start, y),
-                                        end: Vector2::new(end, y),
-                                    });
-                                }
-
-                                x += (config.tool_config.diameter() / 2.0).get::<millimeter>();
-                            }
-
-                            y += (config.tool_config.diameter() / 2.0).get::<millimeter>();
-                            // println!("{}", (y - min_y) / (max_y - min_y));
-                            inc_progress_bar();
-                        }
-
-                        finalize_progress_bar();
-                        init_progress_bar(lines.len());
-                        set_progress_bar_action("Sorting", progress_bar::Color::Cyan, Style::Bold);
-
-                        enum LineSelection {
-                            None,
-                            Start(usize),
-                            End(usize),
-                        }
-
-                        let mut last_position = Vector2::new(min_x, min_y);
-
-                        while !lines.is_empty() {
-                            let mut last_distance = f64::INFINITY;
-                            let mut line_selection = LineSelection::None;
-
-                            for (line_index, line) in lines.iter().enumerate() {
-                                let distance_to_start = (line.start - last_position).norm();
-                                if distance_to_start < last_distance {
-                                    last_distance = distance_to_start;
-                                    line_selection = LineSelection::Start(line_index)
-                                }
-
-                                let distance_to_end = (line.end - last_position).norm();
-                                if distance_to_end < last_distance {
-                                    last_distance = distance_to_end;
-                                    line_selection = LineSelection::End(line_index)
-                                }
-                            }
-
-                            match line_selection {
-                                LineSelection::None => unreachable!(),
-                                LineSelection::Start(index) => {
-                                    let line = lines.remove(index);
-
-                                    config.commands.push(GCommand::MoveTo {
-                                        target: (
-                                            Length::new::<millimeter>(line.start.x),
-                                            Length::new::<millimeter>(line.start.y),
-                                        ),
-                                    });
-                                    config.commands.push(GCommand::Cut {
-                                        movement: MovementType::Linear,
-                                        target: (
-                                            Length::new::<millimeter>(line.end.x),
-                                            Length::new::<millimeter>(line.end.y),
-                                        ),
-                                    });
-
-                                    last_position = line.end;
-                                }
-                                LineSelection::End(index) => {
-                                    let line = lines.remove(index);
-
-                                    config.commands.push(GCommand::MoveTo {
-                                        target: (
-                                            Length::new::<millimeter>(line.end.x),
-                                            Length::new::<millimeter>(line.end.y),
-                                        ),
-                                    });
-                                    config.commands.push(GCommand::Cut {
-                                        movement: MovementType::Linear,
-                                        target: (
-                                            Length::new::<millimeter>(line.start.x),
-                                            Length::new::<millimeter>(line.start.y),
-                                        ),
-                                    });
-
-                                    last_position = line.start;
-                                }
-                            }
-
-                            inc_progress_bar();
-                        }
-
-                        finalize_progress_bar();
-                    }
-
-                    config.commands.push(GCommand::RemoveTool);
-
-                    Ok(())
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }
             }
-            crate::config::machine::ToolConfig::Drill {
-                spindle_rpm: _,
-                plunge_speed: _,
-            } => bail!("gerber files cannot be drilled"),
             crate::config::machine::ToolConfig::EndMill {
-                spindle_rpm,
+                spindle_speed: spindle_rpm,
                 max_cut_depth,
                 plunge_speed,
                 work_speed,
-            } => bail!("milling gerber files is not yet supported"),
+            } => {
+                if let ToolSelection::Spindle { spindle, bit: _ } = config.tool_config {
+                    config.commands.extend(
+                        [
+                            GCommand::EquipTool(Tool::Spindle {
+                                max_spindle_speed: spindle.max_speed,
+                                plunge_speed,
+                                plunge_depth: max_cut_depth,
+                            }),
+                            GCommand::UnitMode(UnitMode::Metric),
+                            GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
+                            GCommand::SetWorkSpeed(work_speed),
+                            GCommand::SetSpindleSpeed(spindle_rpm),
+                            GCommand::SetFanPower {
+                                index: 0,
+                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
+                            },
+                        ]
+                        .iter()
+                        .cloned(),
+                    );
+                } else {
+                    bail!("Job was configured for a spindle but selected tool is not a spindle.");
+                }
+            }
         }
+
+        // Start by generating GCode for the outlines.
+
+        fn add_point_string<'a>(
+            commands: &mut Vec<GCommand>,
+            mut point_iter: impl Iterator<Item = &'a Coord<f64>>,
+        ) {
+            if let Some(first_point) = point_iter.next() {
+                commands.push(GCommand::MoveTo {
+                    target: (
+                        Length::new::<millimeter>(first_point.x),
+                        Length::new::<millimeter>(first_point.y),
+                    ),
+                })
+            }
+
+            for point in point_iter {
+                commands.push(GCommand::Cut {
+                    movement: MovementType::Linear,
+                    target: (
+                        Length::new::<millimeter>(point.x),
+                        Length::new::<millimeter>(point.y),
+                    ),
+                })
+            }
+        }
+
+        {
+            let polygon = &polygon.0;
+            for polygon in polygon.iter() {
+                add_point_string(config.commands, polygon.exterior().0.iter());
+
+                for interior in polygon.interiors() {
+                    add_point_string(config.commands, interior.0.iter());
+                }
+            }
+        }
+
+        if generate_infill {
+            // Now we generate the infill.
+            log::info!("Generating infill.");
+            let bounds = polygon
+                .bounding_rect()
+                .context("Could not compute bounds for PCB.")?;
+
+            let (min_x, min_y, max_x, max_y) = (
+                bounds.min().x + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
+                bounds.min().y + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
+                bounds.max().x,
+                bounds.max().y,
+            );
+
+            struct InfillLine {
+                start: Vector2<f64>,
+                end: Vector2<f64>,
+            }
+
+            init_progress_bar(
+                ((max_y - min_y) / (config.tool_config.diameter() / 2.0).get::<millimeter>()).ceil()
+                    as usize,
+            );
+            set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
+
+            let mut lines = Vec::new();
+
+            let mut y = min_y;
+            while y < max_y {
+                let mut x = min_x;
+                let mut start = None;
+                let mut end = None;
+
+                while x < max_x {
+                    let point = Coord { x, y };
+
+                    if !polygon.contains(&point) ^ invert {
+                        if start.is_none() {
+                            start = Some(x);
+                        }
+
+                        end = Some(x);
+                    } else if let (Some(start), Some(end)) = (start.take(), end.take()) {
+                        lines.push(InfillLine {
+                            start: Vector2::new(start, y),
+                            end: Vector2::new(end, y),
+                        });
+                    }
+
+                    x += (config.tool_config.diameter() / 2.0).get::<millimeter>();
+                }
+
+                y += (config.tool_config.diameter() / 2.0).get::<millimeter>();
+                // println!("{}", (y - min_y) / (max_y - min_y));
+                inc_progress_bar();
+            }
+
+            finalize_progress_bar();
+            init_progress_bar(lines.len());
+            set_progress_bar_action("Sorting", progress_bar::Color::Cyan, Style::Bold);
+
+            enum LineSelection {
+                None,
+                Start(usize),
+                End(usize),
+            }
+
+            let mut last_position = Vector2::new(min_x, min_y);
+
+            while !lines.is_empty() {
+                let mut last_distance = f64::INFINITY;
+                let mut line_selection = LineSelection::None;
+
+                for (line_index, line) in lines.iter().enumerate() {
+                    let distance_to_start = (line.start - last_position).norm();
+                    if distance_to_start < last_distance {
+                        last_distance = distance_to_start;
+                        line_selection = LineSelection::Start(line_index)
+                    }
+
+                    let distance_to_end = (line.end - last_position).norm();
+                    if distance_to_end < last_distance {
+                        last_distance = distance_to_end;
+                        line_selection = LineSelection::End(line_index)
+                    }
+                }
+
+                match line_selection {
+                    LineSelection::None => unreachable!(),
+                    LineSelection::Start(index) => {
+                        let line = lines.remove(index);
+
+                        config.commands.push(GCommand::MoveTo {
+                            target: (
+                                Length::new::<millimeter>(line.start.x),
+                                Length::new::<millimeter>(line.start.y),
+                            ),
+                        });
+                        config.commands.push(GCommand::Cut {
+                            movement: MovementType::Linear,
+                            target: (
+                                Length::new::<millimeter>(line.end.x),
+                                Length::new::<millimeter>(line.end.y),
+                            ),
+                        });
+
+                        last_position = line.end;
+                    }
+                    LineSelection::End(index) => {
+                        let line = lines.remove(index);
+
+                        config.commands.push(GCommand::MoveTo {
+                            target: (
+                                Length::new::<millimeter>(line.end.x),
+                                Length::new::<millimeter>(line.end.y),
+                            ),
+                        });
+                        config.commands.push(GCommand::Cut {
+                            movement: MovementType::Linear,
+                            target: (
+                                Length::new::<millimeter>(line.start.x),
+                                Length::new::<millimeter>(line.start.y),
+                            ),
+                        });
+
+                        last_position = line.start;
+                    }
+                }
+
+                inc_progress_bar();
+            }
+
+            finalize_progress_bar();
+        }
+
+        config.commands.push(GCommand::EquipTool(Tool::None));
+
+        Ok(())
     }
 
     pub fn debug_render(&self, svg: &mut SvgDocument, include_outline: bool) -> Result<()> {

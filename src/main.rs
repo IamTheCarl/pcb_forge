@@ -68,6 +68,9 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
         .context("Failed to load forge file.")?;
 
+    fs::create_dir_all(&build_configuration.target_directory)
+        .context("Failed to create output directory.")?;
+
     let mut gcode_files = HashMap::new();
 
     let mut min_x = f64::INFINITY;
@@ -371,19 +374,19 @@ fn get_tool_selection<'a>(
 ) -> Result<ToolSelection<'a>> {
     log::info!("Using tool: {}", tool_path);
 
-    let mut tool_path = tool_path.ancestors();
+    let mut tool_path: Vec<_> = tool_path
+        .ancestors()
+        .flat_map(|ancestor| ancestor.file_name())
+        .collect();
 
-    let tool_name = tool_path
-        .next()
-        .context("no tool name provided")?
-        .to_string();
+    let tool_name = tool_path.pop().context("no tool name provided")?;
 
     let tool = machine_config
         .tools
-        .get(&tool_name)
-        .context("Could not find specified tool.")?;
+        .get(tool_name)
+        .with_context(|| format!("Could not find specified tool `{}`", tool_name))?;
 
-    let bit_name = tool_path.next().map(|name| name.to_string());
+    let bit_name = tool_path.pop();
 
     Ok(match tool {
         Tool::Laser(laser) => ToolSelection::Laser { laser },
@@ -392,10 +395,9 @@ fn get_tool_selection<'a>(
             log::info!("Using bit: {}", bit_name);
             ToolSelection::Spindle {
                 spindle,
-                bit: spindle
-                    .bits
-                    .get(&bit_name)
-                    .context("Spindle does not have a bit with requested name.")?,
+                bit: spindle.bits.get(bit_name).with_context(|| {
+                    format!("Spindle does not have a bit with name `{}`.", bit_name)
+                })?,
             }
         }
     })

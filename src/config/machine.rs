@@ -72,16 +72,9 @@ pub enum ToolConfig {
         #[serde(deserialize_with = "parse_quantity")]
         work_speed: Velocity<uom::si::SI<f64>, f64>,
     },
-    Drill {
-        #[serde(deserialize_with = "parse_quantity")]
-        spindle_rpm: AngularVelocity<uom::si::SI<f64>, f64>,
-
-        #[serde(deserialize_with = "parse_quantity")]
-        plunge_speed: Velocity<uom::si::SI<f64>, f64>,
-    },
     EndMill {
         #[serde(deserialize_with = "parse_quantity")]
-        spindle_rpm: AngularVelocity<uom::si::SI<f64>, f64>,
+        spindle_speed: AngularVelocity<uom::si::SI<f64>, f64>,
 
         /// The max depth that the end mill should plunge into the board.
         #[serde(deserialize_with = "parse_quantity")]
@@ -107,17 +100,8 @@ impl std::fmt::Display for ToolConfig {
                 laser_power.get::<watt>(),
                 work_speed.get::<millimeter_per_second>()
             ),
-            ToolConfig::Drill {
-                spindle_rpm,
-                plunge_speed,
-            } => write!(
-                f,
-                "RPM: {}, Plunge Speed: {} mm/m",
-                spindle_rpm.get::<revolution_per_minute>(),
-                plunge_speed.get::<millimeter_per_second>()
-            ),
             ToolConfig::EndMill {
-                spindle_rpm,
+                spindle_speed: spindle_rpm,
                 max_cut_depth,
                 plunge_speed,
                 work_speed,
@@ -161,12 +145,6 @@ pub struct SpindleConfig {
 
 #[derive(Debug, Deserialize)]
 pub enum SpindleBit {
-    #[serde(rename = "drill")]
-    Drill {
-        #[serde(deserialize_with = "parse_quantity")]
-        diameter: Length<uom::si::SI<f64>, f64>,
-    },
-
     #[serde(rename = "end_mill")]
     EndMill {
         #[serde(deserialize_with = "parse_quantity")]

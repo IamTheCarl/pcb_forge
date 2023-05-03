@@ -3,13 +3,17 @@
 
 use std::fmt::Write;
 
-use anyhow::{Context, Result};
-use uom::si::{
-    f64::Ratio,
-    length::{mil, millimeter, Length},
-    power::Power,
-    ratio::ratio,
-    velocity::{inch_per_second, millimeter_per_second, Velocity},
+use anyhow::{bail, Result};
+use uom::{
+    num_traits::Zero,
+    si::{
+        angular_velocity::AngularVelocity,
+        f64::Ratio,
+        length::{mil, millimeter, Length},
+        power::Power,
+        ratio::ratio,
+        velocity::{inch_per_second, millimeter_per_second, Velocity},
+    },
 };
 
 use crate::{
@@ -17,15 +21,26 @@ use crate::{
     parsing::UnitMode,
 };
 
-#[derive(Debug, Clone)]
-pub enum GCommand {
-    EquipLaser {
+#[derive(Debug, Clone, Copy)]
+pub enum Tool {
+    None,
+    Laser {
         max_power: Power<uom::si::SI<f64>, f64>,
     },
-    RemoveTool,
+    Spindle {
+        max_spindle_speed: AngularVelocity<uom::si::SI<f64>, f64>,
+        plunge_speed: Velocity<uom::si::SI<f64>, f64>,
+        plunge_depth: Length<uom::si::SI<f64>, f64>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum GCommand {
+    EquipTool(Tool),
     SetRapidTransverseSpeed(Velocity<uom::si::SI<f64>, f64>),
     SetWorkSpeed(Velocity<uom::si::SI<f64>, f64>),
     SetPower(Power<uom::si::SI<f64>, f64>),
+    SetSpindleSpeed(AngularVelocity<uom::si::SI<f64>, f64>),
     Cut {
         movement: MovementType,
         target: (Length<uom::si::SI<f64>, f64>, Length<uom::si::SI<f64>, f64>),
@@ -60,13 +75,15 @@ impl GCodeFile {
     pub fn to_string(&self, x_offset: Length<uom::si::SI<f64>, f64>) -> Result<String> {
         let mut unit_mode = UnitMode::Metric;
         let mut board_side = BoardSide::Front;
+        let mut tool_is_active = false;
+        let mut work_speed = Velocity::zero();
 
         let x_offset = match unit_mode {
             UnitMode::Metric => x_offset.get::<millimeter>(),
             UnitMode::Imperial => x_offset.get::<mil>(),
         };
 
-        let mut max_power = None;
+        let mut tool = Tool::None;
 
         let mut output = String::default();
 
@@ -75,14 +92,9 @@ impl GCodeFile {
 
         for command in self.commands.iter() {
             match command {
-                GCommand::EquipLaser {
-                    max_power: new_max_power,
-                } => {
-                    max_power = Some(*new_max_power);
-                    Ok(())
-                }
-                GCommand::RemoveTool => {
-                    max_power = None;
+                GCommand::EquipTool(new_tool) => {
+                    tool = *new_tool;
+
                     Ok(())
                 }
                 GCommand::SetRapidTransverseSpeed(speed) => writeln!(
@@ -93,26 +105,96 @@ impl GCodeFile {
                         UnitMode::Imperial => speed.get::<inch_per_second>(),
                     }
                 ),
-                GCommand::SetWorkSpeed(speed) => writeln!(
-                    &mut output,
-                    "G1 F{}",
-                    match unit_mode {
-                        UnitMode::Metric => speed.get::<millimeter_per_second>(),
-                        UnitMode::Imperial => speed.get::<inch_per_second>(),
-                    }
-                ),
+                GCommand::SetWorkSpeed(speed) => {
+                    work_speed = *speed;
+                    writeln!(
+                        &mut output,
+                        "G1 F{}",
+                        match unit_mode {
+                            UnitMode::Metric => speed.get::<millimeter_per_second>(),
+                            UnitMode::Imperial => speed.get::<inch_per_second>(),
+                        }
+                    )
+                }
                 GCommand::SetPower(power) => {
-                    let power_ratio = *power / max_power.context("Laser was not equipped")?;
-                    let percentage = (100.0 * power_ratio.get::<ratio>()) as usize;
-                    let pwm_scale = (255.0 * power_ratio.get::<ratio>()) as usize;
+                    if let Tool::Laser { max_power } = &tool {
+                        let power_ratio = *power / *max_power;
+                        let percentage = (100.0 * power_ratio.get::<ratio>()) as usize;
+                        let pwm_scale = (255.0 * power_ratio.get::<ratio>()) as usize;
 
-                    writeln!(&mut output, "M3 P{} S{}", percentage, pwm_scale)
+                        tool_is_active = false;
+                        writeln!(&mut output, "M3 P{} S{}", percentage, pwm_scale)?;
+                        writeln!(&mut output, "M5") // Don't power on the laser just yet.
+                    } else {
+                        bail!("Attempt to set power of non-laser tool.");
+                    }
+                }
+                GCommand::SetSpindleSpeed(speed) => {
+                    if let Tool::Spindle {
+                        max_spindle_speed,
+                        plunge_speed: _,
+                        plunge_depth: _,
+                    } = &tool
+                    {
+                        let power_ratio = *speed / *max_spindle_speed;
+                        let percentage = (100.0 * power_ratio.get::<ratio>().abs()) as usize;
+                        let pwm_scale = (255.0 * power_ratio.get::<ratio>().abs()) as usize;
+
+                        // Note that we let the tool start spinning immediately.
+                        tool_is_active = false;
+                        if power_ratio.is_sign_positive() {
+                            writeln!(&mut output, "M3 P{} S{}", percentage, pwm_scale)
+                        } else {
+                            writeln!(&mut output, "M4 P{} S{}", percentage, pwm_scale)
+                        }
+                    } else {
+                        bail!("Attempt to set speed of non-spindle tool.");
+                    }
                 }
                 GCommand::Cut {
                     movement,
                     target: (x, y),
                 } => {
-                    writeln!(&mut output, "M3")?;
+                    match tool {
+                        Tool::None => bail!("No tool is equipped."),
+                        Tool::Laser { max_power: _ } => {
+                            if !tool_is_active {
+                                writeln!(&mut output, "M3")?;
+                                tool_is_active = true;
+                            }
+                        }
+                        Tool::Spindle {
+                            max_spindle_speed: _,
+                            plunge_speed,
+                            plunge_depth,
+                        } => {
+                            if !tool_is_active {
+                                writeln!(
+                                    &mut output,
+                                    "G1 Z-{} F{}",
+                                    match unit_mode {
+                                        UnitMode::Metric => plunge_depth.get::<millimeter>(),
+                                        UnitMode::Imperial => plunge_depth.get::<mil>(),
+                                    },
+                                    match unit_mode {
+                                        UnitMode::Metric =>
+                                            plunge_speed.get::<millimeter_per_second>(),
+                                        UnitMode::Imperial => plunge_speed.get::<inch_per_second>(),
+                                    }
+                                )?;
+                                writeln!(
+                                    &mut output,
+                                    "G1 F{}",
+                                    match unit_mode {
+                                        UnitMode::Metric =>
+                                            work_speed.get::<millimeter_per_second>(),
+                                        UnitMode::Imperial => work_speed.get::<inch_per_second>(),
+                                    }
+                                )?;
+                                tool_is_active = true;
+                            }
+                        }
+                    }
 
                     let (x, y) = match unit_mode {
                         UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
@@ -129,7 +211,25 @@ impl GCodeFile {
                     }
                 }
                 GCommand::MoveTo { target: (x, y) } => {
-                    writeln!(&mut output, "M5")?;
+                    match tool {
+                        Tool::None => bail!("No tool is equipped."),
+                        Tool::Laser { max_power: _ } => {
+                            if tool_is_active {
+                                writeln!(&mut output, "M5")?;
+                                tool_is_active = false;
+                            }
+                        }
+                        Tool::Spindle {
+                            max_spindle_speed: _,
+                            plunge_speed: _,
+                            plunge_depth: _,
+                        } => {
+                            if tool_is_active {
+                                writeln!(&mut output, "G1 Z0",)?;
+                                tool_is_active = false;
+                            }
+                        }
+                    }
 
                     let (x, y) = match unit_mode {
                         UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
@@ -190,7 +290,6 @@ impl<'a> ToolSelection<'a> {
         match self {
             ToolSelection::Laser { laser } => laser.point_diameter,
             ToolSelection::Spindle { spindle: _, bit } => match bit {
-                SpindleBit::Drill { diameter } => *diameter,
                 SpindleBit::EndMill { diameter } => *diameter,
             },
         }

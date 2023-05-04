@@ -12,11 +12,7 @@ use svg_composer::{
         Element, Path as SvgPath,
     },
 };
-use uom::si::{
-    length::{mil, millimeter, Length},
-    ratio::{percent, Ratio},
-    velocity::{millimeter_per_second, Velocity},
-};
+use uom::si::length::{mil, millimeter, Length};
 
 use crate::{
     forge_file::LineSelection,
@@ -117,10 +113,6 @@ impl GerberFile {
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
                             GCommand::SetPower(laser_power),
-                            GCommand::SetFanPower {
-                                index: 0,
-                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                            },
                         ]
                         .iter()
                         .cloned(),
@@ -147,10 +139,6 @@ impl GerberFile {
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
                             GCommand::SetSpindleSpeed(spindle_rpm),
-                            GCommand::SetFanPower {
-                                index: 0,
-                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                            },
                         ]
                         .iter()
                         .cloned(),
@@ -159,6 +147,12 @@ impl GerberFile {
                     bail!("Job was configured for a spindle but selected tool is not a spindle.");
                 }
             }
+        }
+
+        if let Some(init_gcode) = config.tool_config.init_gcode() {
+            config.commands.push(GCommand::IncludeFile(
+                config.include_file_search_directory.join(init_gcode),
+            ));
         }
 
         // Start by generating GCode for the outlines.
@@ -331,6 +325,12 @@ impl GerberFile {
             }
 
             finalize_progress_bar();
+        }
+
+        if let Some(shutdown_gcode) = config.tool_config.shutdown_gcode() {
+            config.commands.push(GCommand::IncludeFile(
+                config.include_file_search_directory.join(shutdown_gcode),
+            ));
         }
 
         config.commands.push(GCommand::EquipTool(Tool::None));

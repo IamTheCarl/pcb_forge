@@ -68,6 +68,18 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     let forge_file = ForgeFile::load_from_path(&build_configuration.forge_file_path)
         .context("Failed to load forge file.")?;
 
+    let forge_file_directory = build_configuration
+        .forge_file_path
+        .parent()
+        .context("Could not get parent directory of forge file.")?;
+    let config_directory = Config::get_path()
+        .map(|path| {
+            path.parent()
+                .map(|path| path.to_path_buf())
+                .context("Could not get parent directory of global config file.")
+        })
+        .context("Failed to get search directory for global config.")??;
+
     fs::create_dir_all(&build_configuration.target_directory)
         .context("Failed to create output directory.")?;
 
@@ -130,10 +142,14 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     bail!("Too many parts to machine config path.");
                 }
 
-                let machine_config = forge_file
+                let (include_file_search_directory, machine_config) = forge_file
                     .machines
                     .get(&machine_name)
-                    .or(global_config.machines.get(&machine_name))
+                    .map(|machine_config| (forge_file_directory.to_path_buf(), machine_config))
+                    .or(global_config
+                        .machines
+                        .get(&machine_name)
+                        .map(|machine_config| (config_directory.clone(), machine_config)))
                     .context("Failed to find machine configuration.")?;
 
                 let job_config = machine_config
@@ -153,6 +169,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     gcode,
                     min_x: &mut min_x,
                     max_x: &mut max_x,
+                    include_file_search_directory,
                 })?;
             }
             forge_file::Stage::CutBoard {
@@ -191,10 +208,14 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                     bail!("Too many parts to machine config path.");
                 }
 
-                let machine_config = forge_file
+                let (include_file_search_directory, machine_config) = forge_file
                     .machines
                     .get(&machine_name)
-                    .or(global_config.machines.get(&machine_name))
+                    .map(|machine_config| (forge_file_directory.to_path_buf(), machine_config))
+                    .or(global_config
+                        .machines
+                        .get(&machine_name)
+                        .map(|machine_config| (config_directory.clone(), machine_config)))
                     .context("Failed to find machine configuration.")?;
 
                 let job_config = machine_config
@@ -219,6 +240,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                             gcode,
                             min_x: &mut min_x,
                             max_x: &mut max_x,
+                            include_file_search_directory,
                         })?;
                     }
                     forge_file::CutBoardFile::Drill { drill_file } => {
@@ -240,6 +262,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
                                 job_config,
                                 tool_config: &tool_selection,
                                 machine_config,
+                                include_file_search_directory,
                             })
                             .context("Failed to generate gcode file.")?;
                     }
@@ -278,6 +301,7 @@ struct GerberConfig<'a> {
     gcode: &'a mut Vec<GCommand>,
     min_x: &'a mut f64,
     max_x: &'a mut f64,
+    include_file_search_directory: PathBuf,
 }
 
 fn process_gerber_file(config: GerberConfig) -> Result<()> {
@@ -358,6 +382,7 @@ fn process_gerber_file(config: GerberConfig) -> Result<()> {
                 job_config: config.job_config,
                 tool_config: &tool_selection,
                 machine_config: config.machine_config,
+                include_file_search_directory: config.include_file_search_directory,
             },
             config.generate_infill,
             config.select_lines,

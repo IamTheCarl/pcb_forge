@@ -2,10 +2,7 @@ use std::{collections::HashMap, fs, path::Path};
 
 use anyhow::{bail, Context, Result};
 use nalgebra::Vector2;
-use uom::si::{
-    length::{inch, millimeter, Length},
-    ratio::{percent, Ratio},
-};
+use uom::si::length::{inch, millimeter, Length};
 
 use crate::{
     gcode_generation::{GCodeConfig, GCommand, MovementType, Tool, ToolSelection},
@@ -40,10 +37,6 @@ impl DrillFile {
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
                             GCommand::SetPower(laser_power),
-                            GCommand::SetFanPower {
-                                index: 0,
-                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                            },
                         ]
                         .iter()
                         .cloned(),
@@ -70,10 +63,6 @@ impl DrillFile {
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
                             GCommand::SetSpindleSpeed(spindle_rpm),
-                            GCommand::SetFanPower {
-                                index: 0,
-                                power: Ratio::new::<percent>(100.0), // TODO fan configurations should come from the machine config.
-                            },
                         ]
                         .iter()
                         .cloned(),
@@ -82,6 +71,12 @@ impl DrillFile {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }
             }
+        }
+
+        if let Some(init_gcode) = config.tool_config.init_gcode() {
+            config.commands.push(GCommand::IncludeFile(
+                config.include_file_search_directory.join(init_gcode),
+            ));
         }
 
         let distance_per_step = config.job_config.distance_per_step.get::<millimeter>();
@@ -112,6 +107,12 @@ impl DrillFile {
         }
 
         // TODO render paths.
+
+        if let Some(shutdown_gcode) = config.tool_config.shutdown_gcode() {
+            config.commands.push(GCommand::IncludeFile(
+                config.include_file_search_directory.join(shutdown_gcode),
+            ));
+        }
 
         config.commands.push(GCommand::EquipTool(Tool::None));
 
@@ -176,8 +177,6 @@ impl DrillHole {
                 Length::new::<millimeter>(starting_point.y),
             ),
         });
-
-        // Use an approximation for now.
     }
 }
 

@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 use uom::si::{
     angular_velocity::{revolution_per_minute, AngularVelocity},
     length::{millimeter, Length},
@@ -133,6 +133,11 @@ pub struct LaserConfig {
 
     #[serde(deserialize_with = "parse_quantity")]
     pub max_power: Power<uom::si::SI<f64>, f64>,
+
+    #[serde(default)]
+    pub init_gcode: Option<PathBuf>,
+    #[serde(default)]
+    pub shutdown_gcode: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +146,11 @@ pub struct SpindleConfig {
     pub max_speed: AngularVelocity<uom::si::SI<f64>, f64>,
 
     pub bits: HashMap<String, SpindleBit>,
+
+    #[serde(default)]
+    pub init_gcode: Option<PathBuf>,
+    #[serde(default)]
+    pub shutdown_gcode: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]

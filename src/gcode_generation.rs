@@ -1,14 +1,13 @@
 //! Tools to generate GCode.
 //! Fantastic documentation of GCode commands can be found [here](https://marlinfw.org/meta/gcode/).
 
-use std::fmt::Write;
+use std::{fmt::Write, fs, path::PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use uom::{
     num_traits::Zero,
     si::{
         angular_velocity::AngularVelocity,
-        f64::Ratio,
         length::{mil, millimeter, Length},
         power::Power,
         ratio::ratio,
@@ -49,10 +48,7 @@ pub enum GCommand {
         target: (Length<uom::si::SI<f64>, f64>, Length<uom::si::SI<f64>, f64>),
     },
     UnitMode(UnitMode),
-    SetFanPower {
-        index: usize,
-        power: Ratio,
-    },
+    IncludeFile(PathBuf),
     SetSide(BoardSide),
 }
 
@@ -250,13 +246,18 @@ impl GCodeFile {
                         UnitMode::Imperial => writeln!(&mut output, "G22"),
                     }
                 }
-                GCommand::SetFanPower { index, power } => {
-                    if *power > Ratio::new::<ratio>(0.0) {
-                        let power = (255.0 * power.get::<ratio>()) as usize;
-                        writeln!(&mut output, "G106 P{}, S{}", index, power)
-                    } else {
-                        writeln!(&mut output, "G107 P{}", index)
+                GCommand::IncludeFile(file_path) => {
+                    let file_content = fs::read_to_string(file_path)
+                        .with_context(|| format!("Failed to read include file: {:?}", file_path))?;
+
+                    output += &file_content;
+
+                    // It must end with a new line.
+                    if !output.ends_with('\n') {
+                        output += "\n";
                     }
+
+                    Ok(())
                 }
                 GCommand::SetSide(new_side) => {
                     board_side = *new_side;
@@ -294,6 +295,20 @@ impl<'a> ToolSelection<'a> {
             },
         }
     }
+
+    pub fn init_gcode(&self) -> Option<&PathBuf> {
+        match self {
+            ToolSelection::Laser { laser } => laser.init_gcode.as_ref(),
+            ToolSelection::Spindle { spindle, bit: _ } => spindle.init_gcode.as_ref(),
+        }
+    }
+
+    pub fn shutdown_gcode(&self) -> Option<&PathBuf> {
+        match self {
+            ToolSelection::Laser { laser } => laser.shutdown_gcode.as_ref(),
+            ToolSelection::Spindle { spindle, bit: _ } => spindle.shutdown_gcode.as_ref(),
+        }
+    }
 }
 
 pub struct GCodeConfig<'a> {
@@ -301,4 +316,5 @@ pub struct GCodeConfig<'a> {
     pub job_config: &'a JobConfig,
     pub tool_config: &'a ToolSelection<'a>,
     pub machine_config: &'a Machine,
+    pub include_file_search_directory: PathBuf,
 }

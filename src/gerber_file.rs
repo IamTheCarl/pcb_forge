@@ -759,7 +759,7 @@ impl<'a> PlottingContext<'a> {
                             *num_vertices,
                             rotation.deref().unwrap_or(0.0),
                             *hole_diameter,
-                        )?,
+                        ),
                         ApertureTemplate::Macro { name, arguments } => {
                             let aperture_macro = self
                                 .aperture_macros

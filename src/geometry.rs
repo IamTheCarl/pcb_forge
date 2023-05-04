@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use geo::{Coord, LineString, Polygon};
 use nalgebra::{Matrix2, Vector2};
 use ordered_float::NotNan;
@@ -568,10 +568,36 @@ impl Shape {
         num_vertices: u32,
         rotation: f64,
         hole_diameter: Option<f64>,
-    ) -> Result<()> {
-        bail!("Unimplemented 1");
+    ) {
+        let rotation = rotation.to_radians();
+        let angle_per_step = (std::f64::consts::PI * 2.0) / num_vertices as f64;
 
-        // Self::add_hole(transform, shapes, position, hole_diameter);
+        let (direction_y, direction_x) = rotation.sin_cos();
+        let direction = Vector2::new(direction_x, direction_y);
+        let starting_point = position + direction * diameter;
+
+        let mut segments = Vec::new();
+
+        for index in 1..num_vertices as usize {
+            let angle = rotation + angle_per_step * index as f64;
+            let (direction_y, direction_x) = angle.sin_cos();
+            let direction = Vector2::new(direction_x, direction_y);
+            let point = position + direction * diameter;
+            segments.push(Segment::Line { end: point });
+        }
+
+        shape_configuration.shapes.push(Shape {
+            polarity: Polarity::Dark,
+            starting_point,
+            segments,
+        });
+
+        Self::add_hole(
+            shape_configuration.transform,
+            shape_configuration.shapes,
+            position,
+            hole_diameter,
+        );
     }
 }
 

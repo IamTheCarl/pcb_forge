@@ -22,10 +22,11 @@ pub struct DrillFile {
 
 impl DrillFile {
     pub fn generate_gcode(&self, config: GCodeConfig) -> Result<()> {
-        match config.job_config.tool_power {
+        let passes = match config.job_config.tool_power {
             crate::config::machine::ToolConfig::Laser {
                 laser_power,
                 work_speed,
+                passes,
             } => {
                 if let ToolSelection::Laser { laser } = config.tool_config {
                     config.commands.extend(
@@ -41,6 +42,8 @@ impl DrillFile {
                         .iter()
                         .cloned(),
                     );
+
+                    passes
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }
@@ -67,11 +70,14 @@ impl DrillFile {
                         .iter()
                         .cloned(),
                     );
+
+                    // We only ever do one pass.
+                    1
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }
             }
-        }
+        };
 
         if let Some(init_gcode) = config.tool_config.init_gcode() {
             config.commands.push(GCommand::IncludeFile(
@@ -98,11 +104,14 @@ impl DrillFile {
 
             let hole = holes.remove(hole_selection);
 
-            hole.generate_gcode(
-                distance_per_step,
-                config.commands,
-                config.tool_config.diameter().get::<millimeter>(),
-            );
+            for _pass in 0..passes {
+                hole.generate_gcode(
+                    distance_per_step,
+                    config.commands,
+                    config.tool_config.diameter().get::<millimeter>(),
+                );
+            }
+
             last_position = hole.position;
         }
 

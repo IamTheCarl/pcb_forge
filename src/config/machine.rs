@@ -71,6 +71,8 @@ pub enum ToolConfig {
 
         #[serde(deserialize_with = "parse_quantity")]
         work_speed: Velocity<uom::si::SI<f64>, f64>,
+
+        passes: usize,
     },
     EndMill {
         #[serde(deserialize_with = "parse_quantity")]
@@ -94,6 +96,7 @@ impl std::fmt::Display for ToolConfig {
             ToolConfig::Laser {
                 laser_power,
                 work_speed,
+                passes: _,
             } => write!(
                 f,
                 "Power: {} W, Work Speed: {} mm/m",

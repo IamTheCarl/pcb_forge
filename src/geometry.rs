@@ -58,10 +58,14 @@ impl Shape {
         (min_x, min_y, max_x, max_y)
     }
 
-    fn convert_to_line_string(&self, distance_per_step: f64) -> LineString<f64> {
+    pub fn convert_to_geo_line_string(&self, distance_per_step: f64) -> LineString<f64> {
         let mut points = Vec::new();
 
         let mut start_point = self.starting_point;
+        points.push(Coord {
+            x: start_point.x,
+            y: start_point.y,
+        });
         for segment in self.segments.iter() {
             segment.append_to_line_string(distance_per_step, start_point, &mut points);
             start_point = segment.end();
@@ -239,10 +243,10 @@ impl Shape {
         let outer_shape = shapes.pop().unwrap();
 
         Polygon::new(
-            outer_shape.convert_to_line_string(distance_per_step),
+            outer_shape.convert_to_geo_line_string(distance_per_step),
             shapes
                 .drain(..)
-                .map(|shape| shape.convert_to_line_string(distance_per_step))
+                .map(|shape| shape.convert_to_geo_line_string(distance_per_step))
                 .collect(),
         )
     }

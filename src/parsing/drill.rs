@@ -74,8 +74,11 @@ pub enum DrillCommand<'a> {
         // 3.9
         target: Vector2<f64>,
     },
-    ToolDown, // 3.10
-    ToolUp,   // 3.11
+    Route(Vec<RouteCommand>), // 3.10,
+}
+
+#[derive(Debug, Clone)]
+pub enum RouteCommand {
     LinearMove {
         // 3.12
         target: Vector2<f64>,
@@ -167,11 +170,7 @@ fn parse_drill_command(input: Span) -> IResult<Span, DrillCommandContext> {
             parse_route_mode,
             parse_select_tool,
             parse_drill_hit,
-            parse_tool_down,
-            parse_tool_up,
-            parse_linear_move,
-            parse_clockwise_curve,
-            parse_counter_clockwise_curve,
+            parse_route,
         )),
         |command| DrillCommandContext {
             span: input,
@@ -217,15 +216,25 @@ fn parse_drill_hit(input: Span) -> IResult<Span, DrillCommand> {
     )(input)
 }
 
-fn parse_tool_down(input: Span) -> IResult<Span, DrillCommand> {
-    value(DrillCommand::ToolDown, tag("M15"))(input)
+fn parse_route(input: Span) -> IResult<Span, DrillCommand> {
+    map(
+        delimited(
+            terminated(tag("M15"), space),
+            many0(terminated(
+                alt((
+                    parse_linear_move,
+                    parse_clockwise_curve,
+                    parse_counter_clockwise_curve,
+                )),
+                space,
+            )),
+            terminated(tag("M16"), space),
+        ),
+        DrillCommand::Route,
+    )(input)
 }
 
-fn parse_tool_up(input: Span) -> IResult<Span, DrillCommand> {
-    value(DrillCommand::ToolUp, tag("M16"))(input)
-}
-
-fn parse_linear_move(input: Span) -> IResult<Span, DrillCommand> {
+fn parse_linear_move(input: Span) -> IResult<Span, RouteCommand> {
     map(
         preceded(
             tag("G01"),
@@ -234,13 +243,13 @@ fn parse_linear_move(input: Span) -> IResult<Span, DrillCommand> {
                 preceded(nom_char('Y'), parse_decimal),
             ),
         ),
-        |(x, y)| DrillCommand::LinearMove {
+        |(x, y)| RouteCommand::LinearMove {
             target: Vector2::new(x, y),
         },
     )(input)
 }
 
-fn parse_clockwise_curve(input: Span) -> IResult<Span, DrillCommand> {
+fn parse_clockwise_curve(input: Span) -> IResult<Span, RouteCommand> {
     map(
         preceded(
             tag("G02"),
@@ -250,14 +259,14 @@ fn parse_clockwise_curve(input: Span) -> IResult<Span, DrillCommand> {
                 preceded(nom_char('A'), parse_decimal),
             )),
         ),
-        |(x, y, a)| DrillCommand::ClockwiseCurve {
+        |(x, y, a)| RouteCommand::ClockwiseCurve {
             target: Vector2::new(x, y),
             diameter: a,
         },
     )(input)
 }
 
-fn parse_counter_clockwise_curve(input: Span) -> IResult<Span, DrillCommand> {
+fn parse_counter_clockwise_curve(input: Span) -> IResult<Span, RouteCommand> {
     map(
         preceded(
             tag("G02"),
@@ -267,7 +276,7 @@ fn parse_counter_clockwise_curve(input: Span) -> IResult<Span, DrillCommand> {
                 preceded(nom_char('A'), parse_decimal),
             )),
         ),
-        |(x, y, a)| DrillCommand::CounterClockwiseCurve {
+        |(x, y, a)| RouteCommand::CounterClockwiseCurve {
             target: Vector2::new(x, y),
             diameter: a,
         },

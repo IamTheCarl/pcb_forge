@@ -4,6 +4,7 @@
 use std::{fmt::Write, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
+use geo::Coord;
 use uom::{
     num_traits::Zero,
     si::{
@@ -317,4 +318,28 @@ pub struct GCodeConfig<'a> {
     pub tool_config: &'a ToolSelection<'a>,
     pub machine_config: &'a Machine,
     pub include_file_search_directory: PathBuf,
+}
+
+pub fn add_point_string_to_gcode_vector<'a>(
+    commands: &mut Vec<GCommand>,
+    mut point_iter: impl Iterator<Item = &'a Coord<f64>>,
+) {
+    if let Some(first_point) = point_iter.next() {
+        commands.push(GCommand::MoveTo {
+            target: (
+                Length::new::<millimeter>(first_point.x),
+                Length::new::<millimeter>(first_point.y),
+            ),
+        })
+    }
+
+    for point in point_iter {
+        commands.push(GCommand::Cut {
+            movement: MovementType::Linear,
+            target: (
+                Length::new::<millimeter>(point.x),
+                Length::new::<millimeter>(point.y),
+            ),
+        })
+    }
 }

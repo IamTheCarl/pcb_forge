@@ -16,7 +16,9 @@ use uom::si::length::{mil, millimeter, Length};
 
 use crate::{
     forge_file::LineSelection,
-    gcode_generation::{GCodeConfig, GCommand, MovementType, Tool, ToolSelection},
+    gcode_generation::{
+        add_point_string_to_gcode_vector, GCodeConfig, GCommand, MovementType, Tool, ToolSelection,
+    },
     geometry::{ArchDirection, Segment, Shape, ShapeConfiguration},
     parsing::{
         gerber::{
@@ -95,7 +97,7 @@ impl GerberFile {
         } else {
             polygon
                 .offset(config.tool_config.diameter().get::<millimeter>() / 2.0)
-                .map_err(|error| anyhow!("Failed to apply beam offset: {:?}", error))?
+                .map_err(|error| anyhow!("Failed to apply tool diameter offset: {:?}", error))?
         };
 
         // We can actually start to generate GCode now.
@@ -163,40 +165,16 @@ impl GerberFile {
             ));
         }
 
-        fn add_point_string<'a>(
-            commands: &mut Vec<GCommand>,
-            mut point_iter: impl Iterator<Item = &'a Coord<f64>>,
-        ) {
-            if let Some(first_point) = point_iter.next() {
-                commands.push(GCommand::MoveTo {
-                    target: (
-                        Length::new::<millimeter>(first_point.x),
-                        Length::new::<millimeter>(first_point.y),
-                    ),
-                })
-            }
-
-            for point in point_iter {
-                commands.push(GCommand::Cut {
-                    movement: MovementType::Linear,
-                    target: (
-                        Length::new::<millimeter>(point.x),
-                        Length::new::<millimeter>(point.y),
-                    ),
-                })
-            }
-        }
-
         for _pass in 0..passes {
             // Start by generating GCode for the outlines.
 
             {
                 let polygon = &polygon.0;
                 for polygon in polygon.iter() {
-                    add_point_string(config.commands, polygon.exterior().0.iter());
+                    add_point_string_to_gcode_vector(config.commands, polygon.exterior().0.iter());
 
                     for interior in polygon.interiors() {
-                        add_point_string(config.commands, interior.0.iter());
+                        add_point_string_to_gcode_vector(config.commands, interior.0.iter());
                     }
                 }
             }

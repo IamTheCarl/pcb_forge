@@ -1,15 +1,20 @@
 use std::{collections::HashMap, fs, path::Path};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use geo::MultiPolygon;
+use geo_offset::Offset;
 use nalgebra::Vector2;
 use uom::si::length::{inch, millimeter, Length};
 
 use crate::{
-    gcode_generation::{GCodeConfig, GCommand, MovementType, Tool, ToolSelection},
-    geometry::Shape,
+    gcode_generation::{
+        add_point_string_to_gcode_vector, GCodeConfig, GCommand, MovementType, Tool, ToolSelection,
+    },
+    geometry::{Segment, Shape},
     parsing::{
         self,
-        drill::{DrillCommand, HeaderCommand},
+        drill::{DrillCommand, HeaderCommand, RouteCommand},
+        gerber::Polarity,
         UnitMode,
     },
 };
@@ -17,7 +22,7 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct DrillFile {
     holes: Vec<DrillHole>,
-    paths: Vec<DrillPath>,
+    paths: Vec<RoutePath>,
 }
 
 impl DrillFile {
@@ -115,7 +120,24 @@ impl DrillFile {
             last_position = hole.position;
         }
 
-        // TODO render paths.
+        for path in self.paths.iter() {
+            let polygon = path
+                .convert_to_geo_polygon(distance_per_step)
+                .context("Failed to convert route path to polygon.")?;
+
+            let polygon = polygon
+                .offset(-config.tool_config.diameter().get::<millimeter>())
+                .map_err(|error| anyhow!("Failed to apply tool diameter offset: {:?}", error))?;
+
+            let polygons = polygon.0;
+            for polygon in polygons.iter() {
+                add_point_string_to_gcode_vector(config.commands, polygon.exterior().0.iter());
+
+                for interior in polygon.interiors() {
+                    add_point_string_to_gcode_vector(config.commands, interior.0.iter());
+                }
+            }
+        }
 
         if let Some(shutdown_gcode) = config.tool_config.shutdown_gcode() {
             config.commands.push(GCommand::IncludeFile(
@@ -142,6 +164,7 @@ impl DrillHole {
         distance_per_step: f64,
         commands: &mut Vec<GCommand>,
         tool_diameter: f64,
+        // TODO allow limiting tool selections
     ) {
         let tool_radius = tool_diameter / 2.0;
         let inner_diameter = self.diameter - tool_radius;
@@ -190,9 +213,21 @@ impl DrillHole {
 }
 
 #[derive(Debug)]
-pub struct DrillPath {
+pub struct RoutePath {
     shape: Shape,
     diameter: f64,
+}
+
+impl RoutePath {
+    pub fn convert_to_geo_polygon(&self, distance_per_step: f64) -> Result<MultiPolygon<f64>> {
+        let line_string = self.shape.convert_to_geo_line_string(distance_per_step);
+
+        let polygon = line_string
+            .offset(self.diameter)
+            .map_err(|error| anyhow!("Failed to apply tool diameter offset: {:?}", error))?;
+
+        Ok(polygon)
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -309,7 +344,7 @@ fn process_drill_command(
     command: &DrillCommand,
     drilling_context: &mut DrillingContext,
     holes: &mut Vec<DrillHole>,
-    paths: &mut Vec<DrillPath>,
+    paths: &mut Vec<RoutePath>,
 ) -> Result<()> {
     match command {
         DrillCommand::Comment(_comment) => {}
@@ -333,40 +368,92 @@ fn process_drill_command(
         DrillCommand::DrillHit { target } => {
             let target = drilling_context.internalize_coordinate(*target);
 
+            let new_position = match drilling_context.coordinate_mode {
+                CoordinateMode::Absolute => target,
+                CoordinateMode::Incremental => drilling_context.position + target,
+            };
+
+            // We only add a hole if we're in drill mode.
             if drilling_context.cut_mode == CutMode::Drill {
-                match drilling_context.coordinate_mode {
-                    CoordinateMode::Absolute => {
-                        holes.push(DrillHole {
-                            position: target,
-                            diameter: drilling_context
-                                .tool_diameter
-                                .context("No tool equipped.")?,
-                        });
+                holes.push(DrillHole {
+                    position: new_position,
+                    diameter: drilling_context
+                        .tool_diameter
+                        .context("No tool equipped.")?,
+                });
+            }
 
-                        drilling_context.position = target;
-                    }
-                    CoordinateMode::Incremental => {
-                        let new_position = drilling_context.position + target;
+            drilling_context.position = new_position;
+        }
+        DrillCommand::Route(route) => {
+            if drilling_context.cut_mode == CutMode::Route {
+                let starting_point = drilling_context.position;
+                let mut last_point = starting_point;
+                let segments = route
+                    .iter()
+                    .map(|route_command| match route_command {
+                        RouteCommand::LinearMove { target } => {
+                            last_point = *target;
 
-                        holes.push(DrillHole {
-                            position: new_position,
-                            diameter: drilling_context
-                                .tool_diameter
-                                .context("No tool equipped.")?,
-                        });
+                            Segment::Line { end: *target }
+                        }
+                        RouteCommand::ClockwiseCurve { target, diameter } => {
+                            let cord_length = (target - last_point).norm();
+                            let chord_center = (target + last_point) / 2.0;
+                            let radius = diameter / 2.0;
 
-                        drilling_context.position = new_position;
-                    }
-                }
+                            let center_offset_x = chord_center.x
+                                + ((radius.powi(2) - (cord_length / 2.0).powi(2))
+                                    * (target.x - last_point.x))
+                                    .sqrt();
+                            let center_offset_y = chord_center.x
+                                + ((radius.powi(2) - (cord_length / 2.0).powi(2))
+                                    * (last_point.y - target.y))
+                                    .sqrt();
+
+                            last_point = *target;
+                            Segment::ClockwiseCurve {
+                                end: *target,
+                                center: chord_center
+                                    - Vector2::new(center_offset_x, center_offset_y),
+                            }
+                        }
+                        RouteCommand::CounterClockwiseCurve { target, diameter } => {
+                            let cord_length = (target - last_point).norm();
+                            let chord_center = (target + last_point) / 2.0;
+                            let radius = diameter / 2.0;
+
+                            let center_offset_x = chord_center.x
+                                + ((radius.powi(2) - (cord_length / 2.0).powi(2))
+                                    * (target.x - last_point.x))
+                                    .sqrt();
+                            let center_offset_y = chord_center.x
+                                + ((radius.powi(2) - (cord_length / 2.0).powi(2))
+                                    * (last_point.y - target.y))
+                                    .sqrt();
+
+                            last_point = *target;
+                            Segment::CounterClockwiseCurve {
+                                end: *target,
+                                center: chord_center
+                                    + Vector2::new(center_offset_x, center_offset_y),
+                            }
+                        }
+                    })
+                    .collect();
+
+                paths.push(RoutePath {
+                    shape: Shape {
+                        polarity: Polarity::Dark,
+                        starting_point,
+                        segments,
+                    },
+                    diameter: drilling_context.tool_diameter.context("No tool equipped")?,
+                });
             } else {
-                bail!("Drill hit specified while in routing mode.");
+                bail!("Tool down command specified while in drilling mode.");
             }
         }
-        DrillCommand::ToolDown => bail!("Unimplemented 1"),
-        DrillCommand::ToolUp => bail!("Unimplemented 2"),
-        DrillCommand::LinearMove { target } => bail!("Unimplemented 3"),
-        DrillCommand::ClockwiseCurve { target, diameter } => bail!("Unimplemented 4"),
-        DrillCommand::CounterClockwiseCurve { target, diameter } => bail!("Unimplemented 5"),
     }
 
     Ok(())

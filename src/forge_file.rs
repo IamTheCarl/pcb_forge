@@ -7,9 +7,8 @@ use std::{
     fmt::Display,
     path::{Path, PathBuf},
 };
-use uom::si::length::Length;
 
-use crate::{config::machine::Machine, parsing::parse_quantity};
+use crate::config::machine::Machine;
 
 #[derive(Debug, Deserialize)]
 pub struct ForgeFile {
@@ -18,9 +17,6 @@ pub struct ForgeFile {
 
     #[serde(default = "ForgeFile::align_backside_default")]
     pub align_backside: bool,
-
-    #[serde(deserialize_with = "parse_quantity")]
-    pub board_thickness: Length<uom::si::SI<f64>, f64>,
 
     #[serde(default)]
     /// Projects can specify machines as well, to speed up team onboarding.

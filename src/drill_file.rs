@@ -36,12 +36,12 @@ impl DrillFile {
                 if let ToolSelection::Laser { laser } = config.tool_config {
                     config.commands.extend(
                         [
-                            GCommand::EquipTool(Tool::Laser {
-                                max_power: laser.max_power,
-                            }),
                             GCommand::UnitMode(UnitMode::Metric),
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
+                            GCommand::EquipTool(Tool::Laser {
+                                max_power: laser.max_power,
+                            }),
                             GCommand::SetPower(laser_power),
                         ]
                         .iter()
@@ -54,23 +54,25 @@ impl DrillFile {
                 }
             }
             crate::config::machine::ToolConfig::EndMill {
-                spindle_speed: spindle_rpm,
-                max_cut_depth,
+                spindle_speed,
+                travel_height,
+                cut_depth,
                 plunge_speed,
                 work_speed,
             } => {
                 if let ToolSelection::Spindle { spindle, bit: _ } = config.tool_config {
                     config.commands.extend(
                         [
-                            GCommand::EquipTool(Tool::Spindle {
-                                max_spindle_speed: spindle.max_speed,
-                                plunge_speed,
-                                plunge_depth: max_cut_depth,
-                            }),
                             GCommand::UnitMode(UnitMode::Metric),
                             GCommand::SetRapidTransverseSpeed(config.machine_config.jog_speed),
                             GCommand::SetWorkSpeed(work_speed),
-                            GCommand::SetSpindleSpeed(spindle_rpm),
+                            GCommand::EquipTool(Tool::Spindle {
+                                max_spindle_speed: spindle.max_speed,
+                                plunge_speed,
+                                travel_height,
+                                cut_depth,
+                            }),
+                            GCommand::SetSpindleSpeed(spindle_speed),
                         ]
                         .iter()
                         .cloned(),

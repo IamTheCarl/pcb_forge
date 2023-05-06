@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use std::{collections::HashMap, path::PathBuf};
 use uom::si::{
-    angular_velocity::{revolution_per_minute, AngularVelocity},
+    angular_velocity::{revolution_per_second, AngularVelocity},
     length::{millimeter, Length},
     power::{watt, Power},
     velocity::{millimeter_per_second, Velocity},
@@ -78,9 +78,11 @@ pub enum ToolConfig {
         #[serde(deserialize_with = "parse_quantity")]
         spindle_speed: AngularVelocity<uom::si::SI<f64>, f64>,
 
-        /// The max depth that the end mill should plunge into the board.
         #[serde(deserialize_with = "parse_quantity")]
-        max_cut_depth: Length<uom::si::SI<f64>, f64>,
+        travel_height: Length<uom::si::SI<f64>, f64>,
+
+        #[serde(deserialize_with = "parse_quantity")]
+        cut_depth: Length<uom::si::SI<f64>, f64>,
 
         #[serde(deserialize_with = "parse_quantity")]
         plunge_speed: Velocity<uom::si::SI<f64>, f64>,
@@ -99,20 +101,22 @@ impl std::fmt::Display for ToolConfig {
                 passes: _,
             } => write!(
                 f,
-                "Power: {} W, Work Speed: {} mm/m",
+                "Power: {} W, Work Speed: {} mm/s",
                 laser_power.get::<watt>(),
                 work_speed.get::<millimeter_per_second>()
             ),
             ToolConfig::EndMill {
-                spindle_speed: spindle_rpm,
-                max_cut_depth,
+                spindle_speed,
+                travel_height,
+                cut_depth,
                 plunge_speed,
                 work_speed,
             } => write!(
                 f,
-                "RPM: {}, Max Cut Depth: {} mm, Plunge Speed: {} mm/m, Work Speed: {} mm/m",
-                spindle_rpm.get::<revolution_per_minute>(),
-                max_cut_depth.get::<millimeter>(),
+                "RPM: {}, Travel Height: {} mm, Cut Depth: {}, Plunge Speed: {} mm/s, Work Speed: {} mm/m",
+                spindle_speed.get::<revolution_per_second>(),
+                travel_height.get::<millimeter>(),
+                cut_depth.get::<millimeter>(),
                 plunge_speed.get::<millimeter_per_second>(),
                 work_speed.get::<millimeter_per_second>()
             ),

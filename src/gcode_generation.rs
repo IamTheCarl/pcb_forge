@@ -30,7 +30,8 @@ pub enum Tool {
     Spindle {
         max_spindle_speed: AngularVelocity<uom::si::SI<f64>, f64>,
         plunge_speed: Velocity<uom::si::SI<f64>, f64>,
-        plunge_depth: Length<uom::si::SI<f64>, f64>,
+        travel_height: Length<uom::si::SI<f64>, f64>,
+        cut_depth: Length<uom::si::SI<f64>, f64>,
     },
 }
 
@@ -101,17 +102,49 @@ impl GCodeFile {
                         }
                         Tool::Spindle {
                             max_spindle_speed: _,
+                            travel_height,
+                            cut_depth: _,
                             plunge_speed: _,
-                            plunge_depth: _,
                         } => {
                             if tool_is_active {
-                                writeln!(&mut output, "G1 Z0",)?;
+                                writeln!(
+                                    &mut output,
+                                    "G1 Z{}",
+                                    match unit_mode {
+                                        UnitMode::Metric => travel_height.get::<millimeter>(),
+                                        UnitMode::Imperial => travel_height.get::<mil>(),
+                                    }
+                                )?;
                                 tool_is_active = false;
                             }
                         }
                     }
 
                     tool = *new_tool;
+
+                    match tool {
+                        Tool::None => {} // Nothing needs to be done.
+                        Tool::Laser { max_power: _ } => {
+                            writeln!(&mut output, "M5")?;
+                            tool_is_active = false;
+                        }
+                        Tool::Spindle {
+                            max_spindle_speed: _,
+                            travel_height,
+                            cut_depth: _,
+                            plunge_speed: _,
+                        } => {
+                            writeln!(
+                                &mut output,
+                                "G1 Z{}",
+                                match unit_mode {
+                                    UnitMode::Metric => travel_height.get::<millimeter>(),
+                                    UnitMode::Imperial => travel_height.get::<mil>(),
+                                }
+                            )?;
+                            tool_is_active = false;
+                        }
+                    }
 
                     Ok(())
                 }
@@ -150,8 +183,9 @@ impl GCodeFile {
                 GCommand::SetSpindleSpeed(speed) => {
                     if let Tool::Spindle {
                         max_spindle_speed,
+                        travel_height: _,
+                        cut_depth: _,
                         plunge_speed: _,
-                        plunge_depth: _,
                     } = &tool
                     {
                         let power_ratio = *speed / *max_spindle_speed;
@@ -183,16 +217,17 @@ impl GCodeFile {
                         }
                         Tool::Spindle {
                             max_spindle_speed: _,
+                            travel_height: _,
+                            cut_depth,
                             plunge_speed,
-                            plunge_depth,
                         } => {
                             if !tool_is_active {
                                 writeln!(
                                     &mut output,
                                     "G1 Z{} F{}",
-                                    -match unit_mode {
-                                        UnitMode::Metric => plunge_depth.get::<millimeter>(),
-                                        UnitMode::Imperial => plunge_depth.get::<mil>(),
+                                    match unit_mode {
+                                        UnitMode::Metric => cut_depth.get::<millimeter>(),
+                                        UnitMode::Imperial => cut_depth.get::<mil>(),
                                     },
                                     match unit_mode {
                                         UnitMode::Metric =>
@@ -239,11 +274,19 @@ impl GCodeFile {
                         }
                         Tool::Spindle {
                             max_spindle_speed: _,
+                            travel_height,
+                            cut_depth: _,
                             plunge_speed: _,
-                            plunge_depth: _,
                         } => {
                             if tool_is_active {
-                                writeln!(&mut output, "G1 Z0",)?;
+                                writeln!(
+                                    &mut output,
+                                    "G1 Z{}",
+                                    match unit_mode {
+                                        UnitMode::Metric => travel_height.get::<millimeter>(),
+                                        UnitMode::Imperial => travel_height.get::<mil>(),
+                                    }
+                                )?;
                                 tool_is_active = false;
                             }
                         }

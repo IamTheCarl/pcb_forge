@@ -22,8 +22,8 @@ use crate::{
     geometry::{ArchDirection, Segment, Shape, ShapeConfiguration},
     parsing::{
         gerber::{
-            parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, MacroContent,
-            MirroringMode, Operation, Polarity, Span,
+            parse_gerber_file, ApertureTemplate, Attribute, GerberCommand, GerberCommandContext,
+            MacroContent, MirroringMode, Operation, Polarity, Span,
         },
         UnitMode,
     },
@@ -512,6 +512,12 @@ enum DrawMode {
 }
 
 #[derive(Debug)]
+enum ApertureDefinition<'a> {
+    Standard(ApertureTemplate<'a>),
+    Block(Vec<GerberCommandContext<'a>>),
+}
+
+#[derive(Debug)]
 struct PlottingContext<'a> {
     user_attributes: HashMap<&'a str, Vec<Span<'a>>>,
     file_attributes: HashMap<&'a str, Vec<Span<'a>>>,
@@ -519,7 +525,7 @@ struct PlottingContext<'a> {
     object_attributes: HashMap<&'a str, Vec<Span<'a>>>,
 
     aperture_macros: HashMap<&'a str, Vec<MacroContent<'a>>>,
-    aperture_definitions: HashMap<u32, ApertureTemplate<'a>>,
+    aperture_definitions: HashMap<u32, ApertureDefinition<'a>>,
 
     current_point: Vector2<f64>,
     current_aperture: u32,
@@ -590,10 +596,10 @@ impl<'a> PlottingContext<'a> {
                         .get(&self.current_aperture)
                         .context("Aperture was never equipped.")?;
 
-                    if let ApertureTemplate::Circle {
+                    if let ApertureDefinition::Standard(ApertureTemplate::Circle {
                         diameter,
                         hole_diameter,
-                    } = aperture
+                    }) = aperture
                     {
                         if hole_diameter.is_none() {
                             match self.draw_mode {
@@ -693,10 +699,10 @@ impl<'a> PlottingContext<'a> {
                         .context("Aperture was never equipped.")?;
 
                     match aperture {
-                        ApertureTemplate::Circle {
+                        ApertureDefinition::Standard(ApertureTemplate::Circle {
                             diameter,
                             hole_diameter,
-                        } => Shape::circle(
+                        }) => Shape::circle(
                             ShapeConfiguration {
                                 transform: self.calculate_transformation_matrix(),
                                 shapes: &mut gerber_file.shapes,
@@ -706,11 +712,11 @@ impl<'a> PlottingContext<'a> {
                             *diameter,
                             *hole_diameter,
                         ),
-                        ApertureTemplate::Rectangle {
+                        ApertureDefinition::Standard(ApertureTemplate::Rectangle {
                             width,
                             height,
                             hole_diameter,
-                        } => Shape::rectangle(
+                        }) => Shape::rectangle(
                             ShapeConfiguration {
                                 transform: self.calculate_transformation_matrix(),
                                 shapes: &mut gerber_file.shapes,
@@ -721,11 +727,11 @@ impl<'a> PlottingContext<'a> {
                             *height,
                             *hole_diameter,
                         ),
-                        ApertureTemplate::Obround {
+                        ApertureDefinition::Standard(ApertureTemplate::Obround {
                             width,
                             height,
                             hole_diameter,
-                        } => Shape::obround(
+                        }) => Shape::obround(
                             ShapeConfiguration {
                                 transform: self.calculate_transformation_matrix(),
                                 shapes: &mut gerber_file.shapes,
@@ -736,12 +742,12 @@ impl<'a> PlottingContext<'a> {
                             *height,
                             *hole_diameter,
                         ),
-                        ApertureTemplate::Polygon {
+                        ApertureDefinition::Standard(ApertureTemplate::Polygon {
                             diameter,
                             num_vertices,
                             rotation,
                             hole_diameter,
-                        } => Shape::polygon(
+                        }) => Shape::polygon(
                             ShapeConfiguration {
                                 transform: self.calculate_transformation_matrix(),
                                 shapes: &mut gerber_file.shapes,
@@ -753,7 +759,10 @@ impl<'a> PlottingContext<'a> {
                             rotation.deref().unwrap_or(0.0),
                             *hole_diameter,
                         ),
-                        ApertureTemplate::Macro { name, arguments } => {
+                        ApertureDefinition::Standard(ApertureTemplate::Macro {
+                            name,
+                            arguments,
+                        }) => {
                             let aperture_macro = self
                                 .aperture_macros
                                 .get(name.fragment())
@@ -773,6 +782,16 @@ impl<'a> PlottingContext<'a> {
                             // Deferring the error handling until after we push the shape lets us get more into the debug render.
                             gerber_file.aperture_macro_flashes.push(shapes);
                             result?;
+                        }
+                        ApertureDefinition::Block(block) => {
+                            for command in block.clone() {
+                                self.process_command(
+                                    command.command,
+                                    gerber_file,
+                                    gerber_file_path,
+                                    offset,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -853,9 +872,10 @@ impl<'a> PlottingContext<'a> {
             }
             GerberCommand::ApertureDefine { identity, template } => {
                 if identity >= 10 {
-                    self.aperture_definitions.insert(identity, template);
+                    self.aperture_definitions
+                        .insert(identity, ApertureDefinition::Standard(template));
                 } else {
-                    bail!("Aperiture identities ")
+                    bail!("Aperture identities 0 to 9 are reserved.");
                 }
             }
             GerberCommand::ApertureMacro { name, content } => {
@@ -866,7 +886,14 @@ impl<'a> PlottingContext<'a> {
             GerberCommand::LoadMirroring(mirroring) => self.mirroring = mirroring,
             GerberCommand::LoadRotation(rotation) => self.rotation = rotation,
             GerberCommand::LoadScaling(scaling) => self.scaling = scaling,
-            GerberCommand::ApertureBlock(block_id, commands) => bail!("Unimplemented 7."),
+            GerberCommand::ApertureBlock(identity, commands) => {
+                if identity >= 10 {
+                    self.aperture_definitions
+                        .insert(identity, ApertureDefinition::Block(commands));
+                } else {
+                    bail!("Aperture identities 0 to 9 are reserved.");
+                }
+            }
         }
 
         Ok(())

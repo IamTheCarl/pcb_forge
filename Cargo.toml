@@ -25,4 +25,4 @@ thiserror = "1.0.40"
 ordered-float = "3.7.0"
 geo = "0.24"
 progress_bar = "1.0.3"
-geo-offset = { git = "https://github.com/lelongg/geo-offset.git", commit = "325702c4372f8938136a0076b35744839b6e4583" }
+geo-offset = { git = "https://github.com/lelongg/geo-offset.git", rev = "325702c4372f8938136a0076b35744839b6e4583" }

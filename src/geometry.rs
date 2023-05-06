@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use geo::{Coord, LineString, Polygon};
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{Matrix2, Rotation2, Vector2};
 use ordered_float::NotNan;
 use svg_composer::element::path::{
     command::{Arc as SvgArc, CoordinateType, LineTo, LineToOption, MoveTo},
@@ -602,6 +602,186 @@ impl Shape {
             position,
             hole_diameter,
         );
+    }
+
+    pub fn thermal(
+        shape_configuration: ShapeConfiguration,
+        position: Vector2<f64>,
+        outer_diameter: f64,
+        inner_diameter: f64,
+        gap_thickness: f64,
+        rotation: f64,
+    ) {
+        let half_gap = gap_thickness / 2.0;
+        let center = shape_configuration.transform * position;
+        let transform =
+            Rotation2::new(rotation.to_radians()).matrix() * shape_configuration.transform;
+
+        // Top right.
+        let starting_point = transform
+            * (position
+                + Vector2::new((inner_diameter.powi(2) - half_gap.powi(2)).sqrt(), half_gap));
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
+            starting_point,
+            segments: vec![
+                Segment::ClockwiseCurve {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                half_gap,
+                                (inner_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                half_gap,
+                                (outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                },
+                Segment::CounterClockwiseCurve {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                (outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                                half_gap,
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: starting_point,
+                },
+            ],
+        });
+
+        // Top left.
+        let starting_point = transform
+            * (position
+                + Vector2::new(
+                    -(inner_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                    half_gap,
+                ));
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
+            starting_point,
+            segments: vec![
+                Segment::ClockwiseCurve {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                -half_gap,
+                                (inner_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                -half_gap,
+                                (outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                },
+                Segment::CounterClockwiseCurve {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                -(outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                                half_gap,
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: starting_point,
+                },
+            ],
+        });
+
+        // Bottom right.
+        let starting_point = transform
+            * (position
+                + Vector2::new(
+                    (inner_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                    -half_gap,
+                ));
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
+            starting_point,
+            segments: vec![
+                Segment::ClockwiseCurve {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                half_gap,
+                                -(inner_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                half_gap,
+                                -(outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                },
+                Segment::CounterClockwiseCurve {
+                    end: transform
+                        * (position
+                            + Vector2::new(
+                                (outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                                -half_gap,
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: starting_point,
+                },
+            ],
+        });
+
+        // Bottom Left.
+        let starting_point = transform
+            * (position
+                - Vector2::new((inner_diameter.powi(2) - half_gap.powi(2)).sqrt(), half_gap));
+        shape_configuration.shapes.push(Shape {
+            polarity: shape_configuration.polarity,
+            starting_point,
+            segments: vec![
+                Segment::ClockwiseCurve {
+                    end: transform
+                        * (position
+                            - Vector2::new(
+                                half_gap,
+                                (inner_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: transform
+                        * (position
+                            - Vector2::new(
+                                half_gap,
+                                (outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                            )),
+                },
+                Segment::CounterClockwiseCurve {
+                    end: transform
+                        * (position
+                            - Vector2::new(
+                                (outer_diameter.powi(2) - half_gap.powi(2)).sqrt(),
+                                half_gap,
+                            )),
+                    center,
+                },
+                Segment::Line {
+                    end: starting_point,
+                },
+            ],
+        });
     }
 }
 

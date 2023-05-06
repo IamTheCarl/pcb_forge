@@ -1007,7 +1007,29 @@ fn shape_from_aperture_macro(
                 size,
                 center,
                 angle,
-            } => bail!("Unimplemented 3.2"),
+            } => {
+                let transform =
+                    Rotation2::new(angle.evaluate(&variables)?.to_radians()).matrix() * transform;
+
+                let width = size.0.evaluate(&variables)?;
+                let half_width = width / 2.0;
+
+                let height = size.1.evaluate(&variables)?;
+
+                let center_x = center.0.evaluate(&variables)?;
+                let center_y = center.1.evaluate(&variables)?;
+
+                Shape::square_line(
+                    ShapeConfiguration {
+                        transform,
+                        shapes,
+                        polarity: *exposure,
+                    },
+                    height,
+                    Vector2::new(center_x + half_width, center_y) + position,
+                    Vector2::new(center_x - half_width, center_y) + position,
+                );
+            }
             MacroContent::Outline {
                 exposure,
                 coordinates,
@@ -1049,18 +1071,59 @@ fn shape_from_aperture_macro(
                 center_position,
                 diameter,
                 angle,
-            } => bail!("Unimplemented 3.4"),
+            } => {
+                let center_x = center_position.0.evaluate(&variables)?;
+                let center_y = center_position.1.evaluate(&variables)?;
+                let diameter = diameter.evaluate(&variables)?;
+                let angle = angle.evaluate(&variables)?;
+
+                Shape::polygon(
+                    ShapeConfiguration {
+                        transform,
+                        shapes,
+                        polarity: *exposure,
+                    },
+                    Vector2::new(center_x, center_y) + position,
+                    diameter,
+                    *num_vertices,
+                    angle,
+                    None,
+                );
+            }
             MacroContent::Thermal {
                 center_point,
                 outer_diameter,
                 inner_diameter,
                 gap_thickness,
                 angle,
-            } => bail!("Unimplemented 3.5"),
+            } => {
+                let center_x = center_point.0.evaluate(&variables)?;
+                let center_y = center_point.1.evaluate(&variables)?;
+                let inner_diameter = inner_diameter.evaluate(&variables)?;
+                let outer_diameter = outer_diameter.evaluate(&variables)?;
+                let gap_thickness = gap_thickness.evaluate(&variables)?;
+                let angle = angle.evaluate(&variables)?;
+
+                Shape::thermal(
+                    ShapeConfiguration {
+                        transform,
+                        shapes,
+                        polarity: Polarity::Dark,
+                    },
+                    Vector2::new(center_x, center_y) + position,
+                    outer_diameter,
+                    inner_diameter,
+                    gap_thickness,
+                    angle,
+                );
+            }
             MacroContent::VariableDefinition {
                 variable,
                 expression,
-            } => bail!("Unimplemented 3.6"),
+            } => {
+                let value = expression.evaluate(&variables)?;
+                variables.insert(*variable, value);
+            }
         }
     }
 

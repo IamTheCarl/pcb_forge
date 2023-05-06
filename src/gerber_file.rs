@@ -421,7 +421,7 @@ pub fn load(gerber_file: &mut GerberFile, path: &Path) -> Result<()> {
                 let location_info = command.location_info();
 
                 context
-                    .process_command(command.command, gerber_file, path)
+                    .process_command(command.command, gerber_file, path, Vector2::zeros())
                     .with_context(move || {
                         format!(
                             "error processing command: {}:{}",
@@ -537,7 +537,8 @@ impl<'a> PlottingContext<'a> {
         &mut self,
         command: GerberCommand<'a>,
         gerber_file: &mut GerberFile,
-        path: &Path,
+        gerber_file_path: &Path,
+        offset: Vector2<f64>,
     ) -> Result<()> {
         match command {
             GerberCommand::Attribute(attribute) => match attribute {
@@ -577,11 +578,11 @@ impl<'a> PlottingContext<'a> {
                     let mut next_point = self.current_point;
 
                     if let Some(x) = x {
-                        next_point.x = self.format.internalize_coordinate_from_span(x)?;
+                        next_point.x = self.format.internalize_coordinate_from_span(x)? + offset.x;
                     }
 
                     if let Some(y) = y {
-                        next_point.y = self.format.internalize_coordinate_from_span(y)?;
+                        next_point.y = self.format.internalize_coordinate_from_span(y)? + offset.y;
                     }
 
                     let aperture = self
@@ -666,20 +667,24 @@ impl<'a> PlottingContext<'a> {
                 }
                 Operation::Move { x, y } => {
                     if let Some(x) = x {
-                        self.current_point.x = self.format.internalize_coordinate_from_span(x)?;
+                        self.current_point.x =
+                            self.format.internalize_coordinate_from_span(x)? + offset.x;
                     }
 
                     if let Some(y) = y {
-                        self.current_point.y = self.format.internalize_coordinate_from_span(y)?;
+                        self.current_point.y =
+                            self.format.internalize_coordinate_from_span(y)? + offset.y;
                     }
                 }
                 Operation::Flash { x, y } => {
                     if let Some(x) = x {
-                        self.current_point.x = self.format.internalize_coordinate_from_span(x)?;
+                        self.current_point.x =
+                            self.format.internalize_coordinate_from_span(x)? + offset.x;
                     }
 
                     if let Some(y) = y {
-                        self.current_point.y = self.format.internalize_coordinate_from_span(y)?;
+                        self.current_point.y =
+                            self.format.internalize_coordinate_from_span(y)? + offset.y;
                     }
 
                     let aperture = self
@@ -803,11 +808,11 @@ impl<'a> PlottingContext<'a> {
 
                 for operation in operations {
                     let location_info = operation.location_info();
-                    self.process_operation(operation.operation, &mut shape)
+                    self.process_operation(operation.operation, &mut shape, offset)
                         .with_context(move || {
                             format!(
                                 "error processing operation: {}:{}",
-                                path.to_string_lossy(),
+                                gerber_file_path.to_string_lossy(),
                                 location_info
                             )
                         })
@@ -820,7 +825,22 @@ impl<'a> PlottingContext<'a> {
                 iterations,
                 delta,
                 commands,
-            } => bail!("Unimplemented 6."),
+            } => {
+                for x in 0..iterations.x {
+                    for y in 0..iterations.y {
+                        let offset = Vector2::new(x as f64, y as f64).component_mul(&delta);
+
+                        for command in commands.clone() {
+                            self.process_command(
+                                command.command,
+                                gerber_file,
+                                gerber_file_path,
+                                offset,
+                            )?;
+                        }
+                    }
+                }
+            }
             GerberCommand::UnitMode(new_mode) => {
                 self.format.unit_mode = new_mode;
             }
@@ -846,23 +866,28 @@ impl<'a> PlottingContext<'a> {
             GerberCommand::LoadMirroring(mirroring) => self.mirroring = mirroring,
             GerberCommand::LoadRotation(rotation) => self.rotation = rotation,
             GerberCommand::LoadScaling(scaling) => self.scaling = scaling,
-            GerberCommand::ApertureBlock(_, _) => bail!("Unimplemented 7."),
+            GerberCommand::ApertureBlock(block_id, commands) => bail!("Unimplemented 7."),
         }
 
         Ok(())
     }
 
-    fn process_operation(&mut self, operation: Operation, shape: &mut Shape) -> Result<()> {
+    fn process_operation(
+        &mut self,
+        operation: Operation,
+        shape: &mut Shape,
+        offset: Vector2<f64>,
+    ) -> Result<()> {
         match operation {
             Operation::Plot { x, y, i, j } => {
                 let mut next_point = self.current_point;
 
                 if let Some(x) = x {
-                    next_point.x = self.format.internalize_coordinate_from_span(x)?;
+                    next_point.x = self.format.internalize_coordinate_from_span(x)? + offset.x;
                 }
 
                 if let Some(y) = y {
-                    next_point.y = self.format.internalize_coordinate_from_span(y)?;
+                    next_point.y = self.format.internalize_coordinate_from_span(y)? + offset.y;
                 }
 
                 let i = if let Some(i) = i {
@@ -905,11 +930,13 @@ impl<'a> PlottingContext<'a> {
             }
             Operation::Move { x, y } => {
                 if let Some(x) = x {
-                    self.current_point.x = self.format.internalize_coordinate_from_span(x)?;
+                    self.current_point.x =
+                        self.format.internalize_coordinate_from_span(x)? + offset.x;
                 }
 
                 if let Some(y) = y {
-                    self.current_point.y = self.format.internalize_coordinate_from_span(y)?;
+                    self.current_point.y =
+                        self.format.internalize_coordinate_from_span(y)? + offset.y;
                 }
             }
             Operation::LinearMode => self.draw_mode = DrawMode::Linear,

@@ -90,6 +90,27 @@ impl GCodeFile {
         for command in self.commands.iter() {
             match command {
                 GCommand::EquipTool(new_tool) => {
+                    // Disengage the tool.
+                    match tool {
+                        Tool::None => {} // Nothing needs to be done.
+                        Tool::Laser { max_power: _ } => {
+                            if tool_is_active {
+                                writeln!(&mut output, "M5")?;
+                                tool_is_active = false;
+                            }
+                        }
+                        Tool::Spindle {
+                            max_spindle_speed: _,
+                            plunge_speed: _,
+                            plunge_depth: _,
+                        } => {
+                            if tool_is_active {
+                                writeln!(&mut output, "G1 Z0",)?;
+                                tool_is_active = false;
+                            }
+                        }
+                    }
+
                     tool = *new_tool;
 
                     Ok(())
@@ -168,8 +189,8 @@ impl GCodeFile {
                             if !tool_is_active {
                                 writeln!(
                                     &mut output,
-                                    "G1 Z-{} F{}",
-                                    match unit_mode {
+                                    "G1 Z{} F{}",
+                                    -match unit_mode {
                                         UnitMode::Metric => plunge_depth.get::<millimeter>(),
                                         UnitMode::Imperial => plunge_depth.get::<mil>(),
                                     },

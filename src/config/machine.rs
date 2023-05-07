@@ -10,7 +10,7 @@ use uom::si::{
 use nalgebra::Vector2;
 use serde::Deserialize;
 
-use crate::parsing::parse_quantity;
+use crate::parsing::{parse_optional_quantity, parse_quantity};
 
 #[derive(Debug, Deserialize)]
 pub struct Machine {
@@ -87,9 +87,21 @@ pub enum ToolConfig {
         #[serde(deserialize_with = "parse_quantity")]
         plunge_speed: Velocity<uom::si::SI<f64>, f64>,
 
+        #[serde(
+            default = "ToolConfig::default_pass_depth",
+            deserialize_with = "parse_optional_quantity"
+        )]
+        pass_depth: Option<Length<uom::si::SI<f64>, f64>>,
+
         #[serde(deserialize_with = "parse_quantity")]
         work_speed: Velocity<uom::si::SI<f64>, f64>,
     },
+}
+
+impl ToolConfig {
+    fn default_pass_depth() -> Option<Length<uom::si::SI<f64>, f64>> {
+        None
+    }
 }
 
 impl std::fmt::Display for ToolConfig {
@@ -109,14 +121,16 @@ impl std::fmt::Display for ToolConfig {
                 spindle_speed,
                 travel_height,
                 cut_depth,
+                pass_depth,
                 plunge_speed,
                 work_speed,
             } => write!(
                 f,
-                "RPM: {}, Travel Height: {} mm, Cut Depth: {}, Plunge Speed: {} mm/s, Work Speed: {} mm/m",
+                "RPM: {}, Travel Height: {} mm, Cut Depth: {}, Pass Depth: {}, Plunge Speed: {} mm/s, Work Speed: {} mm/m",
                 spindle_speed.get::<revolution_per_second>(),
                 travel_height.get::<millimeter>(),
                 cut_depth.get::<millimeter>(),
+                pass_depth.map_or(0.0, |pass_depth| pass_depth.get::<millimeter>()),
                 plunge_speed.get::<millimeter_per_second>(),
                 work_speed.get::<millimeter_per_second>()
             ),

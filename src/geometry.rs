@@ -490,7 +490,7 @@ impl Shape {
         let bottom = position.y - half_height;
         let top = position.y + half_height;
 
-        let starting_point = Vector2::new(right, bottom);
+        let starting_point = shape_configuration.transform * Vector2::new(right, bottom);
 
         shape_configuration.shapes.push(Shape {
             polarity: shape_configuration.polarity,
@@ -529,30 +529,30 @@ impl Shape {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
 
-        let left = position.x - half_width;
-        let right = position.x + half_width;
-        let bottom = position.y - half_height + half_width;
-        let top = position.y + half_height - half_width;
+        let left = position.x - half_width + half_height;
+        let right = position.x + half_width - half_height;
+        let bottom = position.y - half_height;
+        let top = position.y + half_height;
 
-        let starting_point = Vector2::new(right, bottom);
+        let starting_point = shape_configuration.transform * Vector2::new(right, bottom);
 
         shape_configuration.shapes.push(Shape {
             polarity: shape_configuration.polarity,
             starting_point,
             segments: vec![
-                Segment::Line {
+                Segment::CounterClockwiseCurve {
                     end: shape_configuration.transform * Vector2::new(right, top),
-                },
-                Segment::CounterClockwiseCurve {
-                    end: shape_configuration.transform * Vector2::new(left, top),
-                    center: shape_configuration.transform * Vector2::new(position.x, top),
+                    center: shape_configuration.transform * Vector2::new(right, position.y),
                 },
                 Segment::Line {
-                    end: shape_configuration.transform * Vector2::new(left, bottom),
+                    end: shape_configuration.transform * Vector2::new(left, top),
                 },
                 Segment::CounterClockwiseCurve {
+                    end: shape_configuration.transform * Vector2::new(left, bottom),
+                    center: shape_configuration.transform * Vector2::new(left, position.y),
+                },
+                Segment::Line {
                     end: shape_configuration.transform * Vector2::new(right, bottom),
-                    center: shape_configuration.transform * Vector2::new(position.x, bottom),
                 },
             ],
         });

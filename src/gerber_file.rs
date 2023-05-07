@@ -12,7 +12,10 @@ use svg_composer::{
         Element, Path as SvgPath,
     },
 };
-use uom::si::length::{mil, millimeter, Length};
+use uom::si::{
+    length::{mil, millimeter, Length},
+    ratio::ratio,
+};
 
 use crate::{
     forge_file::LineSelection,
@@ -59,45 +62,54 @@ impl GerberFile {
             polygon.push(shape.convert_to_geo_polygon(distance_per_step));
         }
 
-        let polygon = polygon
-            .iter()
-            .fold(MultiPolygon::new(vec![]), |previous, polygon| {
-                let polygon = MultiPolygon::new(vec![polygon.clone()]);
-                previous.union(&polygon)
-            });
-        // let polygon = MultiPolygon::new(polygon);
+        let polygon = MultiPolygon::new(polygon);
 
-        let polygon = match line_selection {
-            LineSelection::All => polygon,
-            LineSelection::Inner => MultiPolygon::new(
-                polygon
+        fn apply_line_selection(
+            line_selection: LineSelection,
+            polygon: MultiPolygon,
+        ) -> MultiPolygon {
+            match line_selection {
+                LineSelection::All => polygon,
+                LineSelection::Inner => MultiPolygon::new(
+                    polygon
+                        .0
+                        .into_iter()
+                        .flat_map(|polygon| {
+                            polygon
+                                .interiors()
+                                .iter()
+                                .cloned()
+                                .map(|interior| Polygon::new(interior, vec![]))
+                                .collect::<Vec<Polygon>>()
+                        })
+                        .collect(),
+                ),
+                LineSelection::Outer => polygon
                     .0
                     .into_iter()
-                    .flat_map(|polygon| {
-                        polygon
-                            .interiors()
-                            .iter()
-                            .cloned()
-                            .map(|interior| Polygon::new(interior, vec![]))
-                            .collect::<Vec<Polygon>>()
-                    })
+                    .map(|polygon| Polygon::new(polygon.exterior().clone(), vec![]))
                     .collect(),
-            ),
-            LineSelection::Outer => polygon
-                .0
-                .into_iter()
-                .map(|polygon| Polygon::new(polygon.exterior().clone(), vec![]))
-                .collect(),
-        };
+            }
+        }
+
+        let polygon = apply_line_selection(line_selection, polygon);
 
         // Apply offsets from laser.
         let polygon = if invert {
-            // No need for adjustment.
+            // No need for adjustment. Just merge the polygon.
             polygon
+                .iter()
+                .fold(MultiPolygon::new(vec![]), |previous, polygon| {
+                    let polygon = MultiPolygon::new(vec![polygon.clone()]);
+                    previous.union(&polygon)
+                })
         } else {
-            polygon
+            // The offset calculates the merge for us.
+            let polygon = polygon
                 .offset(config.tool_config.diameter().get::<millimeter>() / 2.0)
-                .map_err(|error| anyhow!("Failed to apply tool diameter offset: {:?}", error))?
+                .map_err(|error| anyhow!("Failed to apply tool diameter offset: {:?}", error))?;
+
+            apply_line_selection(line_selection, polygon)
         };
 
         // We can actually start to generate GCode now.
@@ -132,6 +144,7 @@ impl GerberFile {
                 spindle_speed,
                 travel_height,
                 cut_depth,
+                pass_depth,
                 plunge_speed,
                 work_speed,
             } => {
@@ -145,6 +158,7 @@ impl GerberFile {
                                 max_spindle_speed: spindle.max_speed,
                                 plunge_speed,
                                 travel_height,
+                                pass_depth,
                                 cut_depth,
                             }),
                             GCommand::SetSpindleSpeed(spindle_speed),
@@ -153,8 +167,11 @@ impl GerberFile {
                         .cloned(),
                     );
 
-                    // We only ever do one pass.
-                    1
+                    // The number of passes we are to do.
+                    // This will have a tendency to undercut but that should be fine for most use cases.
+                    pass_depth.map_or(1, |pass_depth| {
+                        ((travel_height - cut_depth) / pass_depth).get::<ratio>() as usize
+                    })
                 } else {
                     bail!("Job was configured for a spindle but selected tool is not a spindle.");
                 }
@@ -167,16 +184,24 @@ impl GerberFile {
             ));
         }
 
-        for _pass in 0..passes {
+        for pass_index in 0..passes {
             // Start by generating GCode for the outlines.
 
             {
                 let polygon = &polygon.0;
                 for polygon in polygon.iter() {
-                    add_point_string_to_gcode_vector(config.commands, polygon.exterior().0.iter());
+                    add_point_string_to_gcode_vector(
+                        config.commands,
+                        polygon.exterior().0.iter(),
+                        pass_index,
+                    );
 
                     for interior in polygon.interiors() {
-                        add_point_string_to_gcode_vector(config.commands, interior.0.iter());
+                        add_point_string_to_gcode_vector(
+                            config.commands,
+                            interior.0.iter(),
+                            pass_index,
+                        );
                     }
                 }
             }
@@ -280,6 +305,7 @@ impl GerberFile {
                                 ),
                             });
                             config.commands.push(GCommand::Cut {
+                                pass_index,
                                 movement: MovementType::Linear,
                                 target: (
                                     Length::new::<millimeter>(line.end.x),
@@ -299,6 +325,7 @@ impl GerberFile {
                                 ),
                             });
                             config.commands.push(GCommand::Cut {
+                                pass_index,
                                 movement: MovementType::Linear,
                                 target: (
                                     Length::new::<millimeter>(line.start.x),

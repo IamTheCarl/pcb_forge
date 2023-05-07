@@ -36,6 +36,20 @@ where
     Ok(quantity)
 }
 
+pub fn parse_optional_quantity<'de, U, V, D, DE>(
+    deserializer: DE,
+) -> Result<Option<Quantity<D, U, V>>, DE::Error>
+where
+    DE: Deserializer<'de>,
+    D: uom::si::Dimension + ?Sized,
+    U: uom::si::Units<V> + ?Sized,
+    V: uom::num_traits::Num + uom::Conversion<V>,
+    Quantity<D, U, V>: FromStr,
+    <uom::si::Quantity<D, U, V> as std::str::FromStr>::Err: std::fmt::Debug,
+{
+    Ok(parse_quantity(deserializer).ok())
+}
+
 // pub fn parse_length_unit<'de, DE>(deserializer: DE) -> Result<Units, DE::Error>
 // where
 //     DE: Deserializer<'de>,

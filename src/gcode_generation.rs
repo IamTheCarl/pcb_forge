@@ -32,6 +32,7 @@ pub enum Tool {
         plunge_speed: Velocity<uom::si::SI<f64>, f64>,
         travel_height: Length<uom::si::SI<f64>, f64>,
         cut_depth: Length<uom::si::SI<f64>, f64>,
+        pass_depth: Option<Length<uom::si::SI<f64>, f64>>,
     },
 }
 
@@ -43,6 +44,7 @@ pub enum GCommand {
     SetPower(Power<uom::si::SI<f64>, f64>),
     SetSpindleSpeed(AngularVelocity<uom::si::SI<f64>, f64>),
     Cut {
+        pass_index: usize,
         movement: MovementType,
         target: (Length<uom::si::SI<f64>, f64>, Length<uom::si::SI<f64>, f64>),
     },
@@ -104,6 +106,7 @@ impl GCodeFile {
                             max_spindle_speed: _,
                             travel_height,
                             cut_depth: _,
+                            pass_depth: _,
                             plunge_speed: _,
                         } => {
                             if tool_is_active {
@@ -122,6 +125,7 @@ impl GCodeFile {
 
                     tool = *new_tool;
 
+                    // Make sure that tool is still disengaged.
                     match tool {
                         Tool::None => {} // Nothing needs to be done.
                         Tool::Laser { max_power: _ } => {
@@ -132,6 +136,7 @@ impl GCodeFile {
                             max_spindle_speed: _,
                             travel_height,
                             cut_depth: _,
+                            pass_depth: _,
                             plunge_speed: _,
                         } => {
                             writeln!(
@@ -185,6 +190,7 @@ impl GCodeFile {
                         max_spindle_speed,
                         travel_height: _,
                         cut_depth: _,
+                        pass_depth: _,
                         plunge_speed: _,
                     } = &tool
                     {
@@ -204,6 +210,7 @@ impl GCodeFile {
                     }
                 }
                 GCommand::Cut {
+                    pass_index,
                     movement,
                     target: (x, y),
                 } => {
@@ -217,17 +224,22 @@ impl GCodeFile {
                         }
                         Tool::Spindle {
                             max_spindle_speed: _,
-                            travel_height: _,
+                            travel_height,
                             cut_depth,
+                            pass_depth,
                             plunge_speed,
                         } => {
                             if !tool_is_active {
+                                let target_depth = pass_depth.map_or(cut_depth, |pass_depth| {
+                                    travel_height - pass_depth * *pass_index as f64
+                                });
+
                                 writeln!(
                                     &mut output,
                                     "G1 Z{} F{}",
                                     match unit_mode {
-                                        UnitMode::Metric => cut_depth.get::<millimeter>(),
-                                        UnitMode::Imperial => cut_depth.get::<mil>(),
+                                        UnitMode::Metric => target_depth.get::<millimeter>(),
+                                        UnitMode::Imperial => target_depth.get::<mil>(),
                                     },
                                     match unit_mode {
                                         UnitMode::Metric =>
@@ -276,6 +288,7 @@ impl GCodeFile {
                             max_spindle_speed: _,
                             travel_height,
                             cut_depth: _,
+                            pass_depth: _,
                             plunge_speed: _,
                         } => {
                             if tool_is_active {
@@ -387,6 +400,7 @@ pub struct GCodeConfig<'a> {
 pub fn add_point_string_to_gcode_vector<'a>(
     commands: &mut Vec<GCommand>,
     mut point_iter: impl Iterator<Item = &'a Coord<f64>>,
+    pass_index: usize,
 ) {
     if let Some(first_point) = point_iter.next() {
         commands.push(GCommand::MoveTo {
@@ -399,6 +413,7 @@ pub fn add_point_string_to_gcode_vector<'a>(
 
     for point in point_iter {
         commands.push(GCommand::Cut {
+            pass_index,
             movement: MovementType::Linear,
             target: (
                 Length::new::<millimeter>(point.x),

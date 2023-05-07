@@ -4,7 +4,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use geo::MultiPolygon;
 use geo_offset::Offset;
 use nalgebra::Vector2;
-use uom::si::length::{inch, millimeter, Length};
+use uom::si::{
+    length::{inch, millimeter, Length},
+    ratio::ratio,
+};
 
 use crate::{
     gcode_generation::{
@@ -57,6 +60,7 @@ impl DrillFile {
                 spindle_speed,
                 travel_height,
                 cut_depth,
+                pass_depth,
                 plunge_speed,
                 work_speed,
             } => {
@@ -70,6 +74,7 @@ impl DrillFile {
                                 max_spindle_speed: spindle.max_speed,
                                 plunge_speed,
                                 travel_height,
+                                pass_depth,
                                 cut_depth,
                             }),
                             GCommand::SetSpindleSpeed(spindle_speed),
@@ -78,8 +83,11 @@ impl DrillFile {
                         .cloned(),
                     );
 
-                    // We only ever do one pass.
-                    1
+                    // The number of passes we are to do.
+                    // This will have a tendency to undercut but that should be fine for most use cases.
+                    pass_depth.map_or(1, |pass_depth| {
+                        ((travel_height - cut_depth) / pass_depth).get::<ratio>() as usize
+                    })
                 } else {
                     bail!("Job was configured for a laser but selected tool is not a laser.");
                 }
@@ -111,8 +119,9 @@ impl DrillFile {
 
             let hole = holes.remove(hole_selection);
 
-            for _pass in 0..passes {
+            for pass_index in 0..passes {
                 hole.generate_gcode(
+                    pass_index,
                     distance_per_step,
                     config.commands,
                     config.tool_config.diameter().get::<millimeter>(),
@@ -132,11 +141,22 @@ impl DrillFile {
                 .map_err(|error| anyhow!("Failed to apply tool diameter offset: {:?}", error))?;
 
             let polygons = polygon.0;
-            for polygon in polygons.iter() {
-                add_point_string_to_gcode_vector(config.commands, polygon.exterior().0.iter());
 
-                for interior in polygon.interiors() {
-                    add_point_string_to_gcode_vector(config.commands, interior.0.iter());
+            for polygon in polygons.iter() {
+                for pass_index in 0..passes {
+                    add_point_string_to_gcode_vector(
+                        config.commands,
+                        polygon.exterior().0.iter(),
+                        pass_index,
+                    );
+
+                    for interior in polygon.interiors() {
+                        add_point_string_to_gcode_vector(
+                            config.commands,
+                            interior.0.iter(),
+                            pass_index,
+                        );
+                    }
                 }
             }
         }
@@ -163,6 +183,7 @@ impl DrillHole {
     /// Create the hole using a laser or router bit.
     fn generate_gcode(
         &self,
+        pass_index: usize,
         distance_per_step: f64,
         commands: &mut Vec<GCommand>,
         tool_diameter: f64,
@@ -196,6 +217,7 @@ impl DrillHole {
 
             let new_position = self.position + offset;
             commands.push(GCommand::Cut {
+                pass_index,
                 movement: MovementType::Linear,
                 target: (
                     Length::new::<millimeter>(new_position.x),
@@ -205,6 +227,7 @@ impl DrillHole {
         }
 
         commands.push(GCommand::Cut {
+            pass_index,
             movement: MovementType::Linear,
             target: (
                 Length::new::<millimeter>(starting_point.x),

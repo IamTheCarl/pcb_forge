@@ -185,18 +185,79 @@ impl GerberFile {
         }
 
         for pass_index in 0..passes {
+            log::info!("Processing pass {}.", pass_index + 1);
+
             // Start by generating GCode for the outlines.
 
+            let bounds = polygon
+                .bounding_rect()
+                .context("Could not compute bounds for PCB.")?;
+
+            let (min_x, min_y, max_x, max_y) = (
+                bounds.min().x + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
+                bounds.min().y + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
+                bounds.max().x,
+                bounds.max().y,
+            );
+
             {
-                let polygon = &polygon.0;
-                for polygon in polygon.iter() {
+                let mut polygon_list = polygon.0.clone();
+                let mut last_position = Vector2::new(min_x, min_y);
+
+                while !polygon_list.is_empty() {
+                    let mut last_distance = f64::INFINITY;
+                    let mut polygon_selection = None;
+
+                    for (polygon_index, polygon) in polygon_list.iter().enumerate() {
+                        if let Some(start) = polygon.exterior().coords().next() {
+                            let start = Vector2::new(start.x, start.y);
+                            let distance_to_start = (start - last_position).norm();
+                            if distance_to_start < last_distance {
+                                last_distance = distance_to_start;
+                                polygon_selection = Some(polygon_index);
+                            }
+                        }
+                    }
+
+                    let polygon_index = polygon_selection.expect("No polygon was selected.");
+                    let polygon = polygon_list.remove(polygon_index);
+                    let new_position = polygon
+                        .exterior()
+                        .coords()
+                        .next()
+                        .expect("Polygon did not have any vertices.");
+                    last_position = Vector2::new(new_position.x, new_position.y);
+
                     add_point_string_to_gcode_vector(
                         config.commands,
                         polygon.exterior().0.iter(),
                         pass_index,
                     );
 
-                    for interior in polygon.interiors() {
+                    let mut interior_list = polygon.interiors().to_vec();
+                    while !interior_list.is_empty() {
+                        let mut last_distance = f64::INFINITY;
+                        let mut interior_selection = None;
+
+                        for (interior_index, interior) in interior_list.iter().enumerate() {
+                            if let Some(start) = interior.coords().next() {
+                                let start = Vector2::new(start.x, start.y);
+                                let distance_to_start = (start - last_position).norm();
+                                if distance_to_start < last_distance {
+                                    last_distance = distance_to_start;
+                                    interior_selection = Some(interior_index);
+                                }
+                            }
+                        }
+
+                        let interior_index = interior_selection.expect("No interior was selected.");
+                        let interior = interior_list.remove(interior_index);
+                        let new_position = interior
+                            .coords()
+                            .next()
+                            .expect("Interior did not have any vertices.");
+                        last_position = Vector2::new(new_position.x, new_position.y);
+
                         add_point_string_to_gcode_vector(
                             config.commands,
                             interior.0.iter(),
@@ -209,16 +270,6 @@ impl GerberFile {
             if generate_infill {
                 // Now we generate the infill.
                 log::info!("Generating infill.");
-                let bounds = polygon
-                    .bounding_rect()
-                    .context("Could not compute bounds for PCB.")?;
-
-                let (min_x, min_y, max_x, max_y) = (
-                    bounds.min().x + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
-                    bounds.min().y + (config.tool_config.diameter() / 2.0).get::<millimeter>(),
-                    bounds.max().x,
-                    bounds.max().y,
-                );
 
                 struct InfillLine {
                     start: Vector2<f64>,

@@ -75,7 +75,7 @@ impl GCodeFile {
     pub fn to_string(&self, x_offset: Length<uom::si::SI<f64>, f64>) -> Result<String> {
         let mut unit_mode = UnitMode::Metric;
         let mut board_side = BoardSide::Front;
-        let mut tool_is_active = false;
+        let mut tool_is_ready_to_cut = false;
         let mut work_speed = Velocity::zero();
 
         let x_offset = match unit_mode {
@@ -90,6 +90,15 @@ impl GCodeFile {
         // Put the machine into absolute mode.
         writeln!(&mut output, "G90")?;
 
+        // Move the X-Y axis to the origin so we can lower with minimized risk of hitting a clamp
+        // and be confident of our starting position.
+        writeln!(&mut output, "G0 X0 Y0")?;
+
+        let mut position = (
+            Length::<uom::si::SI<f64>, f64>::zero(),
+            Length::<uom::si::SI<f64>, f64>::zero(),
+        );
+
         for command in self.commands.iter() {
             match command {
                 GCommand::EquipTool(new_tool) => {
@@ -97,9 +106,9 @@ impl GCodeFile {
                     match tool {
                         Tool::None => {} // Nothing needs to be done.
                         Tool::Laser { max_power: _ } => {
-                            if tool_is_active {
+                            if tool_is_ready_to_cut {
                                 writeln!(&mut output, "M5")?;
-                                tool_is_active = false;
+                                tool_is_ready_to_cut = false;
                             }
                         }
                         Tool::Spindle {
@@ -109,16 +118,16 @@ impl GCodeFile {
                             pass_depth: _,
                             plunge_speed: _,
                         } => {
-                            if tool_is_active {
+                            if tool_is_ready_to_cut {
                                 writeln!(
                                     &mut output,
-                                    "G1 Z{}",
+                                    "G0 Z{}",
                                     match unit_mode {
                                         UnitMode::Metric => travel_height.get::<millimeter>(),
                                         UnitMode::Imperial => travel_height.get::<mil>(),
                                     }
                                 )?;
-                                tool_is_active = false;
+                                tool_is_ready_to_cut = false;
                             }
                         }
                     }
@@ -130,7 +139,7 @@ impl GCodeFile {
                         Tool::None => {} // Nothing needs to be done.
                         Tool::Laser { max_power: _ } => {
                             writeln!(&mut output, "M5")?;
-                            tool_is_active = false;
+                            tool_is_ready_to_cut = false;
                         }
                         Tool::Spindle {
                             max_spindle_speed: _,
@@ -141,13 +150,13 @@ impl GCodeFile {
                         } => {
                             writeln!(
                                 &mut output,
-                                "G1 Z{}",
+                                "G0 Z{}",
                                 match unit_mode {
                                     UnitMode::Metric => travel_height.get::<millimeter>(),
                                     UnitMode::Imperial => travel_height.get::<mil>(),
                                 }
                             )?;
-                            tool_is_active = false;
+                            tool_is_ready_to_cut = false;
                         }
                     }
 
@@ -178,7 +187,7 @@ impl GCodeFile {
                         let percentage = (100.0 * power_ratio.get::<ratio>()) as usize;
                         let pwm_scale = (255.0 * power_ratio.get::<ratio>()) as usize;
 
-                        tool_is_active = false;
+                        tool_is_ready_to_cut = false;
                         writeln!(&mut output, "M3 P{} S{}", percentage, pwm_scale)?;
                         writeln!(&mut output, "M5") // Don't power on the laser just yet.
                     } else {
@@ -199,7 +208,7 @@ impl GCodeFile {
                         let pwm_scale = (255.0 * power_ratio.get::<ratio>().abs()) as usize;
 
                         // Note that we let the tool start spinning immediately.
-                        tool_is_active = false;
+                        tool_is_ready_to_cut = false;
                         if power_ratio.is_sign_positive() {
                             writeln!(&mut output, "M3 P{} S{}", percentage, pwm_scale)
                         } else {
@@ -217,9 +226,9 @@ impl GCodeFile {
                     match tool {
                         Tool::None => bail!("No tool is equipped."),
                         Tool::Laser { max_power: _ } => {
-                            if !tool_is_active {
+                            if !tool_is_ready_to_cut {
                                 writeln!(&mut output, "M3")?;
-                                tool_is_active = true;
+                                tool_is_ready_to_cut = true;
                             }
                         }
                         Tool::Spindle {
@@ -229,7 +238,7 @@ impl GCodeFile {
                             pass_depth,
                             plunge_speed,
                         } => {
-                            if !tool_is_active {
+                            if !tool_is_ready_to_cut {
                                 let target_depth = pass_depth.map_or(cut_depth, |pass_depth| {
                                     travel_height - pass_depth * *pass_index as f64
                                 });
@@ -256,10 +265,12 @@ impl GCodeFile {
                                         UnitMode::Imperial => work_speed.get::<inch_per_second>(),
                                     }
                                 )?;
-                                tool_is_active = true;
+                                tool_is_ready_to_cut = true;
                             }
                         }
                     }
+
+                    position = (*x, *y);
 
                     let (x, y) = match unit_mode {
                         UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
@@ -276,46 +287,54 @@ impl GCodeFile {
                     }
                 }
                 GCommand::MoveTo { target: (x, y) } => {
-                    match tool {
-                        Tool::None => bail!("No tool is equipped."),
-                        Tool::Laser { max_power: _ } => {
-                            if tool_is_active {
-                                writeln!(&mut output, "M5")?;
-                                tool_is_active = false;
+                    if position != (*x, *y) {
+                        match tool {
+                            Tool::None => bail!("No tool is equipped."),
+                            Tool::Laser { max_power: _ } => {
+                                if tool_is_ready_to_cut {
+                                    writeln!(&mut output, "M5")?;
+                                    tool_is_ready_to_cut = false;
+                                }
+                            }
+                            Tool::Spindle {
+                                max_spindle_speed: _,
+                                travel_height,
+                                cut_depth: _,
+                                pass_depth: _,
+                                plunge_speed: _,
+                            } => {
+                                if tool_is_ready_to_cut {
+                                    writeln!(
+                                        &mut output,
+                                        "G0 Z{}",
+                                        match unit_mode {
+                                            UnitMode::Metric => travel_height.get::<millimeter>(),
+                                            UnitMode::Imperial => travel_height.get::<mil>(),
+                                        }
+                                    )?;
+                                    tool_is_ready_to_cut = false;
+                                }
                             }
                         }
-                        Tool::Spindle {
-                            max_spindle_speed: _,
-                            travel_height,
-                            cut_depth: _,
-                            pass_depth: _,
-                            plunge_speed: _,
-                        } => {
-                            if tool_is_active {
-                                writeln!(
-                                    &mut output,
-                                    "G1 Z{}",
-                                    match unit_mode {
-                                        UnitMode::Metric => travel_height.get::<millimeter>(),
-                                        UnitMode::Imperial => travel_height.get::<mil>(),
-                                    }
-                                )?;
-                                tool_is_active = false;
-                            }
-                        }
+
+                        position = (*x, *y);
+
+                        let (x, y) = match unit_mode {
+                            UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
+                            UnitMode::Imperial => (x.get::<mil>(), y.get::<mil>()),
+                        };
+
+                        let x = match board_side {
+                            BoardSide::Front => x,
+                            BoardSide::Back => -x + x_offset,
+                        };
+
+                        writeln!(&mut output, "G0 X{} Y{}", x, y)
+                    } else {
+                        // We're already there.
+                        tool_is_ready_to_cut = false;
+                        Ok(())
                     }
-
-                    let (x, y) = match unit_mode {
-                        UnitMode::Metric => (x.get::<millimeter>(), y.get::<millimeter>()),
-                        UnitMode::Imperial => (x.get::<mil>(), y.get::<mil>()),
-                    };
-
-                    let x = match board_side {
-                        BoardSide::Front => x,
-                        BoardSide::Back => -x + x_offset,
-                    };
-
-                    writeln!(&mut output, "G0 X{} Y{}", x, y)
                 }
                 GCommand::UnitMode(new_mode) => {
                     unit_mode = *new_mode;

@@ -225,42 +225,86 @@ impl GerberFile {
                     end: Vector2<f64>,
                 }
 
-                init_progress_bar(
-                    ((max_y - min_y) / (config.tool_config.diameter() / 2.0).get::<millimeter>())
-                        .ceil() as usize,
-                );
-                set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
-
                 let mut lines = Vec::new();
 
-                let mut y = min_y;
-                while y < max_y {
-                    let mut x = min_x;
-                    let mut start = None;
-                    let mut end = None;
+                if pass_index % 2 == 0 {
+                    init_progress_bar(
+                        ((max_y - min_y)
+                            / (config.tool_config.diameter() / 2.0).get::<millimeter>())
+                        .ceil() as usize,
+                    );
+                    set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
 
-                    while x < max_x {
-                        let point = Coord { x, y };
+                    let mut y = min_y;
+                    while y < max_y {
+                        let mut x = min_x;
+                        let mut start = None;
+                        let mut end = None;
 
-                        if !polygon.contains(&point) ^ invert {
-                            if start.is_none() {
-                                start = Some(x);
+                        while x < max_x {
+                            {
+                                let point = Coord { x, y };
+
+                                if !polygon.contains(&point) ^ invert {
+                                    if start.is_none() {
+                                        start = Some(point.x);
+                                    }
+
+                                    end = Some(point.x);
+                                } else if let (Some(start), Some(end)) = (start.take(), end.take())
+                                {
+                                    lines.push(InfillLine {
+                                        start: Vector2::new(start, point.y),
+                                        end: Vector2::new(end, point.y),
+                                    });
+                                }
                             }
 
-                            end = Some(x);
-                        } else if let (Some(start), Some(end)) = (start.take(), end.take()) {
-                            lines.push(InfillLine {
-                                start: Vector2::new(start, y),
-                                end: Vector2::new(end, y),
-                            });
+                            x += (config.tool_config.diameter() / 2.0).get::<millimeter>();
+                        }
+
+                        y += (config.tool_config.diameter() / 2.0).get::<millimeter>();
+                        inc_progress_bar();
+                    }
+                } else {
+                    init_progress_bar(
+                        ((max_x - min_x)
+                            / (config.tool_config.diameter() / 2.0).get::<millimeter>())
+                        .ceil() as usize,
+                    );
+                    set_progress_bar_action("Slicing", progress_bar::Color::Blue, Style::Bold);
+
+                    let mut x = min_x;
+                    while x < max_x {
+                        let mut y = min_y;
+                        let mut start = None;
+                        let mut end = None;
+
+                        while y < max_y {
+                            {
+                                let point = Coord { x, y };
+
+                                if !polygon.contains(&point) ^ invert {
+                                    if start.is_none() {
+                                        start = Some(point.y);
+                                    }
+
+                                    end = Some(point.y);
+                                } else if let (Some(start), Some(end)) = (start.take(), end.take())
+                                {
+                                    lines.push(InfillLine {
+                                        start: Vector2::new(point.x, start),
+                                        end: Vector2::new(point.x, end),
+                                    });
+                                }
+                            }
+
+                            y += (config.tool_config.diameter() / 2.0).get::<millimeter>();
                         }
 
                         x += (config.tool_config.diameter() / 2.0).get::<millimeter>();
+                        inc_progress_bar();
                     }
-
-                    y += (config.tool_config.diameter() / 2.0).get::<millimeter>();
-                    // println!("{}", (y - min_y) / (max_y - min_y));
-                    inc_progress_bar();
                 }
 
                 finalize_progress_bar();

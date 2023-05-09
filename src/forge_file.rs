@@ -22,7 +22,7 @@ pub struct ForgeFile {
     /// Projects can specify machines as well, to speed up team onboarding.
     pub machines: HashMap<String, Machine>,
 
-    pub stages: Vec<Stage>,
+    pub gcode_files: HashMap<PathBuf, Vec<Stage>>,
 }
 
 impl ForgeFile {
@@ -43,7 +43,6 @@ pub enum Stage {
     #[serde(rename = "engrave_mask")]
     EngraveMask {
         machine_config: Option<Utf8PathBuf>,
-        gcode_file: PathBuf,
         gerber_file: PathBuf,
 
         #[serde(default)]
@@ -55,7 +54,6 @@ pub enum Stage {
     #[serde(rename = "cut_board")]
     CutBoard {
         machine_config: Option<Utf8PathBuf>,
-        gcode_file: PathBuf,
 
         #[serde(flatten)]
         file: CutBoardFile,

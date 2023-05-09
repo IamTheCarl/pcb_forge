@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -15,7 +14,9 @@ use config::{
 };
 use forge_file::LineSelection;
 use gcode_generation::GCommand;
+use itertools::Itertools;
 use uom::si::length::{millimeter, Length};
+
 mod drill_file;
 mod gcode_generation;
 mod geometry;
@@ -83,206 +84,211 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
     fs::create_dir_all(&build_configuration.target_directory)
         .context("Failed to create output directory.")?;
 
-    let mut gcode_files = HashMap::new();
-
     let mut min_x = f64::INFINITY;
     let mut max_x = -f64::INFINITY;
 
-    for (stage_index, stage) in forge_file.stages.iter().enumerate() {
-        let debug_output_directory = if build_configuration.debug {
-            let debug_output_directory = build_configuration
-                .target_directory
-                .join("debug")
-                .join(format!("stage{}", stage_index));
-            fs::create_dir_all(&debug_output_directory)
-                .context("Failed to create directory for debug output.")?;
+    for (gcode_file_path, stages) in forge_file
+        .gcode_files
+        .iter()
+        .sorted_by(|a, b| Ord::cmp(&a.0, &b.0))
+    {
+        let mut gcode = Vec::new();
 
-            log::info!("Debug output directory: {:?}", debug_output_directory);
+        log::info!("Starting gcode file {:?}", gcode_file_path);
 
-            Some(debug_output_directory)
-        } else {
-            None
-        };
+        for (stage_index, stage) in stages.iter().enumerate() {
+            let debug_output_directory = if build_configuration.debug {
+                let debug_output_directory = build_configuration
+                    .target_directory
+                    .join("debug")
+                    .join(format!("stage{}", stage_index));
+                fs::create_dir_all(&debug_output_directory)
+                    .context("Failed to create directory for debug output.")?;
 
-        match stage {
-            forge_file::Stage::EngraveMask {
-                machine_config,
-                gerber_file,
-                gcode_file,
-                backside,
-                invert,
-            } => {
-                log::info!("Process engrave stage: {:?}", gerber_file);
+                log::info!("Debug output directory: {:?}", debug_output_directory);
 
-                let gcode: &mut Vec<GCommand> = gcode_files.entry(gcode_file.clone()).or_default();
+                Some(debug_output_directory)
+            } else {
+                None
+            };
 
-                gcode.push(GCommand::SetSide(if *backside {
-                    BoardSide::Back
-                } else {
-                    BoardSide::Front
-                }));
-
-                let machine_config_path = machine_config
-                    .as_ref()
-                    .or(global_config.default_engraver.as_ref())
-                    .context("An engraver was not specified and a global default is not set.")?;
-                log::info!("Using machine configuration: {}", machine_config_path);
-
-                let mut machine_config_path = machine_config_path.iter();
-                let machine_name = machine_config_path
-                    .next()
-                    .context("Machine name not provided by machine config path.")?
-                    .to_string();
-                let machine_profile = machine_config_path
-                    .next()
-                    .context("Machine profile not provided by machine config path.")?
-                    .to_string();
-
-                if machine_config_path.next().is_some() {
-                    bail!("Too many parts to machine config path.");
-                }
-
-                let (include_file_search_directory, machine_config) = forge_file
-                    .machines
-                    .get(&machine_name)
-                    .map(|machine_config| (forge_file_directory.to_path_buf(), machine_config))
-                    .or(global_config
-                        .machines
-                        .get(&machine_name)
-                        .map(|machine_config| (config_directory.clone(), machine_config)))
-                    .context("Failed to find machine configuration.")?;
-
-                let job_config = machine_config
-                    .engraving_configs
-                    .get(&machine_profile)
-                    .context("Failed to find machine profile.")?;
-
-                process_gerber_file(GerberConfig {
-                    build_configuration: &build_configuration,
+            match stage {
+                forge_file::Stage::EngraveMask {
                     machine_config,
-                    job_config,
-                    invert: *invert,
-                    gerber_file: gerber_file.as_ref(),
-                    debug_output_directory: debug_output_directory.as_ref(),
-                    generate_infill: true,
-                    select_lines: LineSelection::All,
-                    gcode,
-                    min_x: &mut min_x,
-                    max_x: &mut max_x,
-                    include_file_search_directory,
-                })?;
-            }
-            forge_file::Stage::CutBoard {
-                machine_config,
-                gcode_file,
-                file,
-                backside,
-            } => {
-                log::info!("Process cutting stage: {}", file);
+                    gerber_file,
+                    backside,
+                    invert,
+                } => {
+                    log::info!("Process engrave stage: {:?}", gerber_file);
 
-                let gcode = gcode_files.entry(gcode_file.clone()).or_default();
+                    gcode.push(GCommand::SetSide(if *backside {
+                        BoardSide::Back
+                    } else {
+                        BoardSide::Front
+                    }));
 
-                gcode.push(GCommand::SetSide(if *backside {
-                    BoardSide::Back
-                } else {
-                    BoardSide::Front
-                }));
+                    let machine_config_path = machine_config
+                        .as_ref()
+                        .or(global_config.default_engraver.as_ref())
+                        .context(
+                            "An engraver was not specified and a global default is not set.",
+                        )?;
+                    log::info!("Using machine configuration: {}", machine_config_path);
 
-                let machine_config_path = machine_config
-                    .as_ref()
-                    .or(global_config.default_cutter.as_ref())
-                    .context("An engraver was not specified and a global default is not set.")?;
-                log::info!("Using machine configuration: {}", machine_config_path);
+                    let mut machine_config_path = machine_config_path.iter();
+                    let machine_name = machine_config_path
+                        .next()
+                        .context("Machine name not provided by machine config path.")?
+                        .to_string();
+                    let machine_profile = machine_config_path
+                        .next()
+                        .context("Machine profile not provided by machine config path.")?
+                        .to_string();
 
-                let mut machine_config_path = machine_config_path.iter();
-                let machine_name = machine_config_path
-                    .next()
-                    .context("Machine name not provided by machine config path.")?
-                    .to_string();
-                let machine_profile = machine_config_path
-                    .next()
-                    .context("Machine profile not provided by machine config path.")?
-                    .to_string();
+                    if machine_config_path.next().is_some() {
+                        bail!("Too many parts to machine config path.");
+                    }
 
-                if machine_config_path.next().is_some() {
-                    bail!("Too many parts to machine config path.");
-                }
-
-                let (include_file_search_directory, machine_config) = forge_file
-                    .machines
-                    .get(&machine_name)
-                    .map(|machine_config| (forge_file_directory.to_path_buf(), machine_config))
-                    .or(global_config
+                    let (include_file_search_directory, machine_config) = forge_file
                         .machines
                         .get(&machine_name)
-                        .map(|machine_config| (config_directory.clone(), machine_config)))
-                    .context("Failed to find machine configuration.")?;
+                        .map(|machine_config| (forge_file_directory.to_path_buf(), machine_config))
+                        .or(global_config
+                            .machines
+                            .get(&machine_name)
+                            .map(|machine_config| (config_directory.clone(), machine_config)))
+                        .context("Failed to find machine configuration.")?;
 
-                let job_config = machine_config
-                    .cutting_configs
-                    .get(&machine_profile)
-                    .context("Failed to find machine profile.")?;
+                    let job_config = machine_config
+                        .engraving_configs
+                        .get(&machine_profile)
+                        .context("Failed to find machine profile.")?;
 
-                match file {
-                    forge_file::CutBoardFile::Gerber {
-                        gerber_file,
-                        select_lines,
-                    } => {
-                        process_gerber_file(GerberConfig {
-                            build_configuration: &build_configuration,
-                            machine_config,
-                            job_config,
-                            invert: false,
-                            gerber_file: gerber_file.as_ref(),
-                            debug_output_directory: debug_output_directory.as_ref(),
-                            generate_infill: false,
-                            select_lines: *select_lines,
-                            gcode,
-                            min_x: &mut min_x,
-                            max_x: &mut max_x,
-                            include_file_search_directory,
-                        })?;
+                    process_gerber_file(GerberConfig {
+                        build_configuration: &build_configuration,
+                        machine_config,
+                        job_config,
+                        invert: *invert,
+                        gerber_file: gerber_file.as_ref(),
+                        debug_output_directory: debug_output_directory.as_ref(),
+                        generate_infill: true,
+                        select_lines: LineSelection::All,
+                        gcode: &mut gcode,
+                        min_x: &mut min_x,
+                        max_x: &mut max_x,
+                        include_file_search_directory,
+                    })?;
+                }
+                forge_file::Stage::CutBoard {
+                    machine_config,
+                    file,
+                    backside,
+                } => {
+                    log::info!("Process cutting stage: {}", file);
+
+                    gcode.push(GCommand::SetSide(if *backside {
+                        BoardSide::Back
+                    } else {
+                        BoardSide::Front
+                    }));
+
+                    let machine_config_path = machine_config
+                        .as_ref()
+                        .or(global_config.default_cutter.as_ref())
+                        .context(
+                            "An engraver was not specified and a global default is not set.",
+                        )?;
+                    log::info!("Using machine configuration: {}", machine_config_path);
+
+                    let mut machine_config_path = machine_config_path.iter();
+                    let machine_name = machine_config_path
+                        .next()
+                        .context("Machine name not provided by machine config path.")?
+                        .to_string();
+                    let machine_profile = machine_config_path
+                        .next()
+                        .context("Machine profile not provided by machine config path.")?
+                        .to_string();
+
+                    if machine_config_path.next().is_some() {
+                        bail!("Too many parts to machine config path.");
                     }
-                    forge_file::CutBoardFile::Drill { drill_file } => {
-                        let file_path = build_configuration
-                            .forge_file_path
-                            .parent()
-                            .context("Could not get working directory of forge file.")?
-                            .join(drill_file);
 
-                        let mut drill_file = drill_file::DrillFile::default();
-                        drill_file::load(&mut drill_file, &file_path)
-                            .context("Failed to load drill file.")?;
+                    let (include_file_search_directory, machine_config) = forge_file
+                        .machines
+                        .get(&machine_name)
+                        .map(|machine_config| (forge_file_directory.to_path_buf(), machine_config))
+                        .or(global_config
+                            .machines
+                            .get(&machine_name)
+                            .map(|machine_config| (config_directory.clone(), machine_config)))
+                        .context("Failed to find machine configuration.")?;
 
-                        let tool_selection = get_tool_selection(machine_config, &job_config.tool)?;
+                    let job_config = machine_config
+                        .cutting_configs
+                        .get(&machine_profile)
+                        .context("Failed to find machine profile.")?;
 
-                        drill_file
-                            .generate_gcode(GCodeConfig {
-                                commands: gcode,
-                                job_config,
-                                tool_config: &tool_selection,
+                    match file {
+                        forge_file::CutBoardFile::Gerber {
+                            gerber_file,
+                            select_lines,
+                        } => {
+                            process_gerber_file(GerberConfig {
+                                build_configuration: &build_configuration,
                                 machine_config,
+                                job_config,
+                                invert: false,
+                                gerber_file: gerber_file.as_ref(),
+                                debug_output_directory: debug_output_directory.as_ref(),
+                                generate_infill: false,
+                                select_lines: *select_lines,
+                                gcode: &mut gcode,
+                                min_x: &mut min_x,
+                                max_x: &mut max_x,
                                 include_file_search_directory,
-                            })
-                            .context("Failed to generate gcode file.")?;
+                            })?;
+                        }
+                        forge_file::CutBoardFile::Drill { drill_file } => {
+                            let file_path = build_configuration
+                                .forge_file_path
+                                .parent()
+                                .context("Could not get working directory of forge file.")?
+                                .join(drill_file);
+
+                            let mut drill_file = drill_file::DrillFile::default();
+                            drill_file::load(&mut drill_file, &file_path)
+                                .context("Failed to load drill file.")?;
+
+                            let tool_selection =
+                                get_tool_selection(machine_config, &job_config.tool)?;
+
+                            drill_file
+                                .generate_gcode(GCodeConfig {
+                                    commands: &mut gcode,
+                                    job_config,
+                                    tool_config: &tool_selection,
+                                    machine_config,
+                                    include_file_search_directory,
+                                })
+                                .context("Failed to generate gcode file.")?;
+                        }
                     }
                 }
             }
         }
-    }
 
-    let backside_offset = if forge_file.align_backside {
-        max_x - min_x
-    } else {
-        0.0
-    };
+        let backside_offset = if forge_file.align_backside {
+            max_x - min_x
+        } else {
+            0.0
+        };
 
-    for (path, commands) in gcode_files {
-        let output_file = build_configuration.target_directory.join(&path);
-        let gcode_file = GCodeFile::new(commands);
+        let output_file = build_configuration.target_directory.join(gcode_file_path);
+        let gcode_file = GCodeFile::new(gcode);
         let output = gcode_file
             .to_string(Length::new::<millimeter>(backside_offset))
-            .with_context(|| format!("Failed to produce GCode for file: {:?}", path))?;
+            .with_context(|| format!("Failed to produce GCode for file: {:?}", gcode_file_path))?;
         fs::write(output_file, output).context("Failed to save GCode file.")?;
     }
 

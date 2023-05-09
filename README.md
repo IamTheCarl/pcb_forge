@@ -237,49 +237,50 @@ The following is an example from a board I made for a smart window blind.
 project_name: "Window Blind Motor"
 board_version: 1.0.0
 
-# Stages will be processed in the order they are listed.
-# If multiple stages list the same gcode file, they will be appended to
-# what is already in that file, following the order they are listed in this forge file.
-stages:
-  - !cut_board # Cut through holes.
-      # You can specify a drill hole file or a gerber file for cutting.
-      drill_file: WindowBlindMotor-PTH.drl
+# GCode files will be generated in an arbitrary order.
+gcode_files:
+  # The gcode file to be generated.
+  drill.gcode:
+    # We now list the stages to be generated.
+    # Each will be generated and added to the gcode file in the order they are defined here.
+    - !cut_board # Cut through holes.
+        # You can specify a drill hole file or a gerber file for cutting.
+        drill_file: WindowBlindMotor-PTH.drl
 
-      # The gcode file to append the generated code to.
-      gcode_file: drill.gcode
+        # The gcode file to append the generated code to.
+        gcode_file: drill.gcode
 
-      # The machine configuration to use when generating the gcode.
-      machine_config: snap_maker/copper_plate
+        # The machine configuration to use when generating the gcode.
+        machine_config: snap_maker/copper_plate
 
-      # If set to true, the generated gcode will be inverted on the X
-      # axis, perfect for cutting or engraving from the back side of
-      # the board. Defaults to false.
-      backside: true
-  - !cut_board # Cut board outline.
-      # See? You can also use a gerber file!
-      gerber_file: WindowBlindMotor-Edge_Cuts.gbr
-      gcode_file: board_shape.gcode
-      machine_config: snap_maker/copper_plate
+        # If set to true, the generated gcode will be inverted on the X
+        # axis, perfect for cutting or engraving from the back side of
+        # the board. Defaults to false.
+        backside: true
+    - !cut_board # Cut board outline.
+        # You can also use gerber files.
+        gerber_file: WindowBlindMotor-Edge_Cuts.gbr
+        machine_config: snap_maker/copper_plate
 
-      # You can set this to inner, outer, or all.
-      # All will generate gcode to cut out the exact shape in the gerber file.
-      # inner will only cut out the inner holes of the gerber file.
-      # outer will cause it to only cut out the outline, or the figure of the shape.
-      select_lines: outer
-      backside: true
-  - !cut_board # Cut a jig to make sure we align the board right.
-      gerber_file: WindowBlindMotor-Edge_Cuts.gbr
-      gcode_file: jig.gcode
-      machine_config: snap_maker/cardboard_prototype
-      select_lines: outer
-  - !engrave_mask # Engrave back copper etching mask.
-      gerber_file: WindowBlindMotor-B_Cu.gbr
-      gcode_file: etching.gcode
-      machine_config: snap_maker/copper_plate
-      backside: true
-  - !engrave_mask # Engrave silkscreen
-      gerber_file: WindowBlindMotor-F_Silkscreen.gbr
-      gcode_file: silkscreen.gcode
-      machine_config: snap_maker/copper_plate
-      invert: true
+        # You can set this to inner, outer, or all.
+        # All will generate gcode to cut out the exact shape in the gerber file.
+        # inner will only cut out the inner holes of the gerber file.
+        # outer will cause it to only cut out the outline, or the figure of the shape.
+        select_lines: outer
+        backside: true
+  jig.gcode:
+    - !cut_board # Cut a jig to make sure we align the board right.
+        gerber_file: WindowBlindMotor-Edge_Cuts.gbr
+        machine_config: snap_maker/cardboard_prototype
+        select_lines: outer
+  etching.gcode:
+    - !engrave_mask # Engrave back copper etching mask.
+        gerber_file: WindowBlindMotor-B_Cu.gbr
+        machine_config: snap_maker/copper_plate
+        backside: true
+  silkscreen.gcode:
+    - !engrave_mask # Engrave silkscreen
+        gerber_file: WindowBlindMotor-F_Silkscreen.gbr
+        machine_config: snap_maker/copper_plate
+        invert: true
 ```

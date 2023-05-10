@@ -81,8 +81,11 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
         })
         .context("Failed to get search directory for global config.")??;
 
-    fs::create_dir_all(&build_configuration.target_directory)
-        .context("Failed to create output directory.")?;
+    let target_directory = build_configuration
+        .target_directory
+        .join(forge_file.project_name);
+
+    fs::create_dir_all(&target_directory).context("Failed to create output directory.")?;
 
     let mut min_x = f64::INFINITY;
     let mut max_x = -f64::INFINITY;
@@ -98,8 +101,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
 
         for (stage_index, stage) in stages.iter().enumerate() {
             let debug_output_directory = if build_configuration.debug {
-                let debug_output_directory = build_configuration
-                    .target_directory
+                let debug_output_directory = target_directory
                     .join("debug")
                     .join(format!("stage{}", stage_index));
                 fs::create_dir_all(&debug_output_directory)
@@ -284,7 +286,7 @@ fn build(build_configuration: arguments::BuildCommand, global_config: Config) ->
             0.0
         };
 
-        let output_file = build_configuration.target_directory.join(gcode_file_path);
+        let output_file = target_directory.join(gcode_file_path);
         let gcode_file = GCodeFile::new(gcode);
         let output = gcode_file
             .to_string(Length::new::<millimeter>(backside_offset))

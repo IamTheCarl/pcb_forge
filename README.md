@@ -4,7 +4,7 @@ PCB Forge is a tool for generating GCode files from gerber files and drill files
 This readme file will quickly cover how the config file formats work and what prototyping/manufacturing processes can be used.
 
 # Disclaimer
-This tool is currently an early work. It is your responsibility to validate the generated GCode that it will produce the expected products and not damage your machine. If you discover that your input files produce gcode that is incorrect or may damage a machine, please open an issue providing all your input files and explain what is wrong with the generated gcode.
+This tool is currently an early work and not well tested. It is your responsibility to validate the generated GCode that it will produce the expected products and not damage your machine. If you discover that your input files produce gcode that is incorrect or may damage a machine, please open an issue providing all your input files and explain what is wrong with the generated gcode.
 
 I use [ncviewer.com](https://ncviewer.com/) as a way to visualize GCode while testing. If your machine comes with a visualizer, you should prefer that as it's likely more accurate to your machine.
 
@@ -18,10 +18,10 @@ An additional yaml file to specify the manufacturing process will be needed with
 PCB Forge only outputs GCode files. Multiple GCode files can be produced from a single board to make switching between machines and tools easier.
 
 # Prototyping techniques
-Being able to produce PCBs with through holes and solder masks at home within two or three days can already be considered rapid prototyping by some standards, but you can test the measurements and generated gcode with the following techniques within minutes and extremely low risks.
+Being able to produce PCBs with through holes and solder masks at home within a day can already be considered rapid prototyping by some standards, but you can test the measurements and generated gcode with the following techniques within minutes and extremely low risks.
 
 ## Laser Cut Cardboard
-Using the laser, you can engrave and cut a PCB in less than 20 minutes out of cardboard. This is a great way to check the measurements of your footprints or to verify the design will fit on the copper plate you plan to use for the real thing.
+Using the laser, you can engrave and cut a PCB in less than 20 minutes out of cardboard. Although electrically useless, this is a great way to check the measurements of your footprints or to verify the design will fit on the copper plate you plan to use for the real thing. It's also a good way to get use to the workflow of PCB Forge.
 
 ## Pen Plotted Paper
 A pen plotter uses similar movements to an end mill and a marker can have a similar diameter to one as well. This can be a good way to practice generating gcode for an end mill without the risk of breaking bits or wasting copper plates.
@@ -32,42 +32,50 @@ These are techniques you can use to actually fabricate real circuit boards with 
 
 ## Spray Painted etching mask
 
-This process is derived from a [video by Robonza](https://www.youtube.com/watch?v=RuSg7-hMaQg&t=610s). Actually that video inspired this whole project. This technique provides the best speed and precision.
+This process is derived from a [video by Robonza](https://www.youtube.com/watch?v=RuSg7-hMaQg&t=610s). Actually that video inspired this whole project. This technique should provide the best speed and precision, but is still a work in progress.
 
-Get an FR4 board with a copper plating. Spray paint the copper side. Use PCB Forge to etch away paint on areas you wish to remove copper from. You can then use an etchant to remove the copper. I use [a home made concoction](https://www.instructables.com/Is-the-best-PCB-etchant-in-every-kitchen-/) for my etchant. Please check with local authorities on how to dispose of bi-products responsibly.
-
-Once you're done etching, spray paint on another layer and etch away the solder mask layer, giving you a solder mask.
-
-If your laser is powerful enough (something in the ballpark of 60w) you can also use the laser to cut holes into your copper and cut the board shape, but if your laser is less powerful like mine, you can use an end mill to cut your holes. Unfortunately, this is a very slow process. If you're in this situation, you may want to prefer surface mount components.
+1. Get an FR4 board with a copper plating.
+2. Use a CNC mill to cut through holes into your copper plate and then cut out the board shape.
+3. Clean the board so that it is free of dust and finger prints. I like to spray it with compressed air and then rub it down with acetone or rubbing alcohol.
+4. Spray paint the copper side. A primer meant for metals is ideal.
+5. Secure a sacrificial piece of cardboard onto your laser cutter. Cut the board outline into it. Insert your PCB into the hole created. This jig should perfectly align your PCB with the coordinate system of your laser cutter.
+6. Use the laser cutter to etch away paint on areas you wish to remove copper from.
+7. Use an etchant to remove the copper. I use [a home made concoction](https://www.instructables.com/Is-the-best-PCB-etchant-in-every-kitchen-/) for my etchant. Please check with local authorities on how to dispose of bi-products responsibly. Heating the solution will make it go faster but be careful not to go too hot. I've found 75C to be pretty good.
+8. Remove the board from the etchant and rinse with water. If you heated the board during the etching process, make sure to use hot water. Cold water will create thermal shock that causes the paint to delaminate.
+9. Once dry, Spray paint on another layer and etch away the solder mask layer, giving you a solder mask.
 
 ## Milling
+
+I haven't tried this technique myself yet but it should work. It looks right in the simulations and the machine worked correctly when a pen plotter was used to test the generated code.
 
 You can use milling for the entire fabrication process of your board, but this is much less precise and very time consuming. You also won't be able to create solder masks with this technique.
 
 # Config Files
-There are two config files that PCB Forge reads from The first is a global config used to provide default values to all your projects. This config file is entirely optional.
+There are two config files that PCB Forge reads from. The first is a global config used to provide default values to all your projects. This config file is entirely optional.
 
-The second is the Forge File. This one is mandatory and every project must have one. It will specify the manufacturing process to be used with your PCB.
+The second is the Forge File. This one is mandatory and every project must have at least one. It will specify how gcode files for your fabrication process should be generated.
 
-All numeric values in config files have their units specified after them. This isn't just for looks, PCB Forge will convert your units into an internal format and then into whatever format your CNC machine supports. If the manual for your CNC machine specifies its bed in inches, just type them into your config file as inches and PCB Forge will do the conversions for you.
+All numeric values in config files have their units specified after them. This isn't just for looks, PCB Forge will convert your units into an internal format and then into whatever format your CNC machine supports. If the manual for your CNC machine specifies its bed size in inches, just type them into your config file as inches and PCB Forge will do the conversions for you.
 
 # Global Config file
 The global config file is optional. You can store machine and tool profiles to be globally accessible. You can also specify default profiles to use when none is specified in the forge file. If values are specified in the forge file, they will override what is specified in this file.
 
 ## Global Config Example
-This is the global config file I use for my Snap Maker A350.
+This is an example of a global config for an A350 Snap Maker. This example is not maintained and likely contains less than ideal configurations.
+I will likely keep a maintained copy of my configurations elsewhere for you to use as a base once I dial in the manufacturing process more.
 ```yaml
 # This is a list of machines you have available.
-# This can also be specified in the forge file. Entries in the forge file will override entries in this file.
+# Machines can also be specified in the forge file. Entries in the forge file will override entries in this file.
 machines:
   # The name of the machine.
   snap_maker:
     # The max speed it can move at. This will be used for jog operations.
     jog_speed: 3000 mm/s
 
-    # The tool heads available to the machine.
-    # You have the option of lasers or spindles.
+    # This is a lost of tool heads available to the machine.
+    # You have the options of lasers or spindles.
     # The snap maker has interchangeable tool heads so it has both lasers and spindles.
+    # If your machine has only one dedicated purpose, then only specify one spindle or one laser.
     tools:
       # The name for my laser.
       10w_laser:
@@ -80,13 +88,14 @@ machines:
 
           # GCode that will be inserted near the beginning of generated gcode files
           # to initialize the tool. This particular one turns on the laser's fan.
+          # The gcode file is expected to be in the same file as this list of machines.
           init_gcode: power_on_laser_fan.gcode
 
       # The name for my spindle.
       spindle:
         !spindle
           # The maximum speed of the spindle.
-          # Even if the spindle doesn't support setting its speed, you should
+          # Even if the spindle doesn't support variable speed, you should
           # accurately specify this to insure gcode is generated correctly.
           max_speed: 120000 rpm
 
@@ -130,17 +139,17 @@ machines:
         # How much power to use while cutting. It is important
         # that you configured the maximum power correctly, otherwise
         # this may generate incorrect gcode.
-        laser_power:  0.75 W
+        laser_power:  0.375 W
 
         # How many times to pass over the board while engraving.
-        passes: 1
+        passes: 2
 
       # Engraves spray paint off copper to make an etching mask.
       copper_plate:
         tool: 10w_laser
         work_speed: 3000.0 mm/s
         laser_power:  0.75 W
-        passes: 2
+        passes: 4
 
       # A "spindle" can also engrave.
       # You could use this to entirely mill a PCB, rather than etch it, but etching is much faster and more precise.
@@ -158,16 +167,19 @@ machines:
 
         # The depth the tool should cut down to.
         # This can be done in multiple passes (see cutting configs below)
+        # Zero represents the board's surface, so normally you'd want to go
+        # below that, but because we're plotting with a pen, we want to
+        # ride right on the surface.
         cut_depth: 0.0 mm
 
         # The speed at which to plunge the tool.
         plunge_speed: 3000.0 mm/s
 
-        # The speed at which the tool can cut at.
+        # The speed at which the tool can "cut" at.
         work_speed: 3000.0 mm/s
 
     # Configurations used for cutting the board.
-    # This will be used for cutting through holes and the board's outline.
+    # This will be used for cutting through holes and the board's outline/shape.
     cutting_configs:
       # A laser can be used for cutting.
       cardboard_prototype:
@@ -175,7 +187,8 @@ machines:
         work_speed: 1000.0 mm/s
         laser_power: 10 W
         passes: 1
-      # This will actually cut through the copper plate.
+
+      # Cut through the copper plate with an end mill.
       copper_plate:
         # The path selects the tool and then the bit.
         tool: spindle/square_end_mill
@@ -202,6 +215,9 @@ machines:
 
         # The speed at which the tool can cut at.
         work_speed: 5 mm/s
+
+      # Just another example but with a bic pen this time.
+      # It doesn't actually cut.
       bic_pen:
         tool: plotter/bic_pen
         spindle_speed: 0 rpm
@@ -225,12 +241,11 @@ default_cutter: snap_maker/cardboard_prototype
 ```
 
 # Forge File
-A forge file specifies the gcode files to be generated and how they are to be generated. The exact order and configuration you use will depend on your project and the fabrication process you chose to use.
+A forge file specifies the gcode files to be generated and how they are to be generated. The configuration you use will depend on your project and the fabrication process you chose to use.
 
-Note that the `machines` section from the global config can be specified in this forge file as well. Machines defined here will override what is in the global config. This is ideal for quick onboarding with teams.
+Note that the `machines` section from the global config can be specified in the forge file as well. Machines defined here will override what is in the global config. This is ideal for quick onboarding with teams.
 
-The following is an example from a board I made for a smart window blind.
-
+The following is an example from a board I made for some home made smart blinds.
 ```yaml
 # Meta data.
 # Currently not used but will eventually be included in gcode files as metadata.
@@ -282,5 +297,11 @@ gcode_files:
     - !engrave_mask # Engrave silkscreen
         gerber_file: WindowBlindMotor-F_Silkscreen.gbr
         machine_config: snap_maker/copper_plate
+        invert: true
+  solder_mask.gcode:
+    - !engrave_mask # Engrave solder mask.
+        gerber_file: WindowBlindMotor-B_Mask.gbr
+        machine_config: snap_maker/copper_plate
+        backside: true
         invert: true
 ```
